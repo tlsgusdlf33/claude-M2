@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>멍멍 용사단</title>
+<style>html,body{margin:0;height:100%;background:#10181f}</style>
+</head>
+<body>
+<script>
+/* 앱의 시작 화면. 어떤 게임 파일로 시작할지 고르기만 하고, 게임은 game.txt(앱에 들어 있는 버전) 또는
+ * 받아 둔 새 버전(localStorage)에서 읽어 와서 이 창에 덮어쓴다.
+ * 이 파일(index.html)은 APK 안에 고정되어 있어서 업데이트로 바뀌지 않는다. 그래서 일부러 아주 작게 둔다.
+ *
+ * 규칙
+ *  - 받아 둔 버전이 앱에 들어 있는 버전보다 높으면 그 버전으로 시작한다.
+ *  - 그런데 지난번에 그 버전으로 시작하고도 "정상 시작" 기록(MMYG.ok)이 없으면 고장 난 버전으로 보고 버린다.
+ *    그 버전 번호는 bad 로 적어 두어서 다시 받지 않는다.
+ *  - 앱을 새 APK로 덮어 설치해서 앱 버전이 더 높아지면 낡은 저장본은 지운다.
+ * 덮어쓰기는 일부러 setTimeout 안에서 한다. 파싱 중인 스크립트 안에서 document.open() 을 부르면 무시되어
+ * 옛 문서와 새 문서가 한 화면에 섞여 실행된다.
+ */
+(function () {
+  var BUNDLED = __VERSION__;
+  var K = { html: 'mmyg-upd-html', ver: 'mmyg-upd-ver', tried: 'mmyg-upd-try', good: 'mmyg-upd-good', bad: 'mmyg-upd-bad' };
+  function g(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
+  function s(k, v) { try { window.localStorage.setItem(k, v); } catch (e) {} }
+  function d(k) { try { window.localStorage.removeItem(k); } catch (e) {} }
+  function launch(text, ver) {
+    window.__mmygOta = ver;
+    document.open();
+    document.write(text);
+    document.close();
+  }
+  function start() {
+    var cv = +g(K.ver) || 0, html = g(K.html), tried = +g(K.tried) || 0, good = +g(K.good) || 0;
+    if (cv > BUNDLED && html) {
+      if (tried === cv && good !== cv) {
+        s(K.bad, String(cv)); d(K.html); d(K.ver);
+      } else {
+        s(K.tried, String(cv));
+        launch(html, cv);
+        return;
+      }
+    } else if (cv) {
+      d(K.html); d(K.ver);
+    }
+    fetch('game.txt', { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(function (t) { launch(t, 0); })
+      .catch(function () { document.body.textContent = '게임을 불러오지 못했어요. 앱을 다시 실행해 주세요.'; });
+  }
+  setTimeout(start, 0);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+name: Publish game update
+
+# 게임 화면과 규칙(prototype/)을 고쳐서 main에 올리면, 설치된 앱이 다음에 켜질 때 자동으로 받아 간다.
+# APK를 다시 설치할 필요가 없다. 앱 껍데기(광고, 결제 같은 네이티브 부분)를 바꾼 경우만 build-apk.yml 로 APK를 새로 만든다.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "prototype/**"
+      - "tools/make-www.py"
+      - "tools/updater.js"
+      - ".github/workflows/ota.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ota
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the update files
+        run: |
+          VERSION=$(date -u +%Y%m%d%H%M%S)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          python3 tools/make-www.py prototype/index.html out --version "$VERSION" \
+            --base "https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/"
+          mkdir pub
+          cp out/game.html out/version.json pub/
+          cat pub/version.json
+
+      # 아티팩트 저장 공간을 쓰지 않으려고 gh-pages 브랜치에 직접 올린다. 매번 새로 만들어 기록이 쌓이지 않는다.
+      - name: Publish to the gh-pages branch
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd pub
+          git init -q
+          git checkout -q -b gh-pages
+          git add -A
+          git -c user.name="github-actions" -c user.email="actions@github.com" commit -q -m "game update $VERSION"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git" gh-pages

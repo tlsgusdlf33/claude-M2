@@ -1,0 +1,5 @@
+node_modules/
+android-app/android/
+android-app/www/
+android-app/package-lock.json
+.godot/
