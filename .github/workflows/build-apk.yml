@@ -74,12 +74,12 @@ jobs:
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Collect the APK
-        run: cp android-app/android/app/build/outputs/apk/debug/app-debug.apk mmyg-debug.apk
+        run: cp android-app/android/app/build/outputs/apk/debug/app-debug.apk moonlight-debug.apk
 
       - name: Check that the APK uses the fixed key
         run: |
           EXPECTED=$(keytool -list -keystore android-app/debug.keystore -storepass android | grep -i 'SHA-256' | sed 's/.*: //')
-          ACTUAL=$(keytool -printcert -jarfile mmyg-debug.apk | grep 'SHA256' | head -1 | sed 's/.*SHA256: //')
+          ACTUAL=$(keytool -printcert -jarfile moonlight-debug.apk | grep 'SHA256' | head -1 | sed 's/.*SHA256: //')
           echo "expected $EXPECTED"
           echo "actual   $ACTUAL"
           test "$EXPECTED" = "$ACTUAL"
@@ -88,6 +88,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_number }}
-          name: "멍멍 용사단 APK #${{ github.run_number }}"
+          name: "달빛 온실 APK #${{ github.run_number }}"
           prerelease: true
-          files: mmyg-debug.apk
+          files: moonlight-debug.apk

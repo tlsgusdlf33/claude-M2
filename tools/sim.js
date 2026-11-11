@@ -2,83 +2,64 @@ const fs = require('fs');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 const m = html.match(/\/\/ ==CORE_START==([\s\S]*?)\/\/ ==CORE_END==/);
 if (!m) throw new Error('core markers not found');
-const core = new Function(m[1] + '; return {W,H,PY,DEF,newGame,update,stats,cost,reward,stageDef,baseHp,DOGS,offlineReward};')();
-const { W, PY, newGame, update, cost, reward, stats, DOGS, offlineReward } = core;
-let DOG = 'beagle';
+const C = new Function(m[1] + '; return {W,H,newGame,update,cost,reward,dayLen,offlineReward,progress};')();
+const { newGame, update, cost, reward, dayLen, offlineReward } = C;
 
-function smartInput(g) {
-  // manual: stand under the lowest enemy, step out of warned zones and incoming shots
-  let tx = W / 2, best = -1e9;
-  for (const e of g.en) if (e.y > best) { best = e.y; tx = e.x; }
-  const bad = [];
-  for (const z of g.zones) if (z.age < z.warn + z.act) bad.push([z.x - z.w / 2 - 22, z.x + z.w / 2 + 22]);
-  for (const s of g.shots) if (s.y > PY - 130 && s.y < PY + 10) bad.push([s.x - 22, s.x + 22]);
-  const inBad = x => bad.some(([a, b]) => x > a && x < b);
-  if (inBad(tx) || inBad(g.px)) {
-    let bx = null, bd = 1e9;
-    for (let x = 20; x <= W - 20; x += 4) {
-      if (inBad(x)) continue;
-      const d = Math.abs(x - g.px) * 1 + Math.abs(x - tx) * 0.3;
-      if (d < bd) { bd = d; bx = x; }
-    }
-    if (bx !== null) tx = bx;
+// 자동: 손 안 댐. 직접: 가장 덜 자란 새싹 위에 물뿌리개를 두고 잡초는 바로 누른다
+function autoPolicy() { return { down: false, x: 0, y: 0 }; }
+function manualPolicy(g) {
+  let tgt = null;
+  for (const s of g.sp) {
+    if (s.bloom) continue;
+    if (!tgt || s.p / s.need < tgt.p / tgt.need) tgt = s;
   }
-  return { down: true, x: tx, ult: g.gauge >= 100 };
+  const o = { down: !!tgt, x: tgt ? tgt.x : 0, y: tgt ? tgt.y - 30 : 0 };
+  const w = g.sp.find(s => s.weed > 0);
+  if (w && g.t % 1.5 < 1 / 60) o.tapWeed = { x: w.x, y: w.y - 30 };
+  return o;
 }
-function autoInput(g) { return { down: false, x: g.px, ult: g.gauge >= 100 }; }
-
 function run(stage, up, policy, seed) {
-  const g = newGame(stage, up, seed, DOG);
+  const g = newGame(stage, up, seed);
   let steps = 0;
-  while (g.status === 'play' && steps < 60 * 150) { update(g, 1 / 60, policy(g)); steps++; }
-  return { status: g.status, coins: g.coins, time: g.t, hp: g.hp, maxHp: g.maxHp, kills: g.kills };
+  while (g.status === 'play' && steps < 60 * 400) { update(g, 1 / 60, policy(g)); steps++; }
+  return { status: g.status, gain: g.gain, time: g.t, day: g.day, bloomed: g.bloomed, total: g.total };
 }
-
-function campaign(policyName, policy) {
-  const up = { atk: 0, spd: 0, hp: 0 };
-  let coins = 0, rows = [];
-  const keys = ['atk', 'spd', 'hp'];
+const keys = ['fly', 'can', 'soil'];
+function campaign(name, policy) {
+  const up = { fly: 0, can: 0, soil: 0 };
+  let dew = 0; const rows = [];
   const spend = () => {
-    let bought = true;
-    while (bought) {
-      bought = false;
-      // buy the lowest-level stat first
+    let again = true;
+    while (again) {
+      again = false;
       keys.sort((a, b) => up[a] - up[b]);
-      for (const k of keys) {
-        const c = cost(up[k]);
-        if (coins >= c) { coins -= c; up[k]++; bought = true; break; }
-      }
+      for (const k of keys) { const c = cost(up[k]); if (dew >= c) { dew -= c; up[k]++; again = true; break; } }
     }
   };
   for (let s = 1; s <= 10; s++) {
-    let tries = 0, res;
-    do {
-      tries++;
-      res = run(s, up, policy, 5000 + s * 31 + tries);
-      coins += res.status === 'won' ? res.coins : Math.floor(res.coins * 0.5);
-      spend();
-    } while (res.status !== 'won' && tries < 12);
-    rows.push({ stage: s, tries, won: res.status === 'won', time: +res.time.toFixed(1), hpLeft: Math.round(res.hp), lv: `${up.atk}/${up.spd}/${up.hp}`, coinsLeft: coins });
+    let tries = 0, r;
+    do { tries++; r = run(s, up, policy, 900 + s * 17 + tries); dew += r.gain; spend(); } while (r.status !== 'won' && tries < 10);
+    rows.push({ stage: s, tries, won: r.status === 'won', time: Math.round(r.time), day: r.day, lv: `${up.fly}/${up.can}/${up.soil}`, dewLeft: dew });
   }
-  console.log('== ' + policyName);
-  console.table(rows);
+  console.log('== ' + name); console.table(rows);
 }
-
-for (const d of Object.keys(DOGS)) {
-  DOG = d;
-  console.log('######## ' + DOGS[d].name);
-  campaign('auto only', autoInput);
-  campaign('smart manual', smartInput);
-}
-DOG = 'beagle';
-console.log('offline: stage5 60min', offlineReward(5, 60, false), '| 600min', offlineReward(5, 600, false), '| club 600min', offlineReward(5, 600, true));
-
-// boss check at fixed levels
-for (const lv of [0, 2, 4, 6]) {
-  const up = { atk: lv, spd: lv, hp: lv };
-  const out = [5, 10].map(s => {
-    const a = run(s, up, autoInput, 11), b = run(s, up, smartInput, 11);
-    return `s${s} auto:${a.status}(${a.time.toFixed(0)}s) smart:${b.status}(${b.time.toFixed(0)}s,hp ${Math.round(b.hp)})`;
+campaign('자동만', autoPolicy);
+campaign('직접 조작', manualPolicy);
+console.log('방치 보상 스테이지5 60분', offlineReward(5, 60, false), '| 500분', offlineReward(5, 500, false), '| 구독 500분', offlineReward(5, 500, true));
+for (const lv of [0, 2, 3, 4, 5, 6, 8]) {
+  const up = { fly: lv, can: lv, soil: lv };
+  const out = [1,2,3,4,5,6,7,8,9,10].map(s => {
+    const a = run(s, up, autoPolicy, 11), b = run(s, up, manualPolicy, 11);
+    return `${s}:${a.status[0]}${Math.round(a.time)}/${b.status[0]}${Math.round(b.time)}`;
   });
-  console.log('all-stat level', lv, out.join(' | '));
+  console.log('전체 Lv', lv, '(자동/직접) ' + out.join(' '));
 }
+// 스테이지 1~4 클리어 때 누적 이슬과 5 클리어에 필요한 강화량
+let tot = 0; for (let s = 1; s <= 4; s++) tot += reward(s);
+console.log('1~4 클리어 합계 이슬', tot, ' 강화 비용 Lv0→1/2/3/4', cost(0), cost(1), cost(2), cost(3));
+const rec = [];
+for (let s = 1; s <= 10; s++) { let L = 0; for (; L < 20; L++) { const up = { fly: L, can: L, soil: L }; let ok = 0; for (let k = 0; k < 8; k++) if (run(s, up, autoPolicy, 50 + k).status === 'won') ok++; if (ok === 8) break; } rec.push(L); }
+console.log('자동 클리어 최소 전체 Lv(8판 모두 성공):', rec.join(','));
+const recm = [];
+for (let s = 1; s <= 10; s++) { let L = 0; for (; L < 20; L++) { const up = { fly: 0, can: L, soil: 0 }; let ok = 0; for (let k = 0; k < 8; k++) if (run(s, up, manualPolicy, 50 + k).status === 'won') ok++; if (ok === 8) break; } recm.push(L); }
+console.log('직접 조작 시 물뿌리개 Lv:', recm.join(','));

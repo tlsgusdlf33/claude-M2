@@ -1,8 +1,8 @@
 {
-  "appId": "com.mmyg.proto",
-  "appName": "멍멍 용사단",
+  "appId": "com.moonlight.greenhouse",
+  "appName": "달빛 온실",
   "webDir": "www",
   "android": {
-    "backgroundColor": "#10181f"
+    "backgroundColor": "#13212b"
   }
 }
