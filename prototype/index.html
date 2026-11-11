@@ -125,6 +125,7 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 #dlgm{white-space:pre-line}
 .dlgb{display:flex;flex-direction:column;gap:8px}
 
+
 /* ---------- 달빛 온실 ---------- */
 #battle{padding-block:10px calc(12px + var(--bh))}
 .hud{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -138,6 +139,13 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .letter:first-of-type{border-top:0}
 .letter summary{cursor:pointer;font-weight:700}
 .letter p{margin:6px 0 0;color:var(--muted);white-space:pre-line;line-height:1.6}
+.pager{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.pager .link:disabled{color:var(--muted);text-decoration:none;opacity:.5}
+.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.st{font-size:16px}
+.muted{color:var(--muted);font-family:var(--f-body);font-size:12px}
+.bufft{color:var(--accent);font-variant-numeric:tabular-nums}
+.rbox .gain{white-space:pre-line;font-size:20px}
 </style>
 <div id="app">
   <section id="login" class="screen" hidden>
@@ -165,9 +173,10 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
     </div>
     <div class="card" id="updcard" hidden></div>
     <div class="card" id="idle"></div>
+    <div class="card" id="buff"></div>
     <div class="card">
       <h2>스테이지</h2>
-      <div class="stages" id="stages"></div>
+      <div id="stages"></div>
     </div>
     <div class="card" id="ups"></div>
     <div class="card" id="letters"></div>
@@ -224,30 +233,38 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 var W=360,H=560;
 // 달빛 온실: 새싹들을 모두 피우면 클리어. 해가 지기 전에 피우지 못하면 새싹들이 잠들 뿐 벌칙은 없다.
 function rng(seed){var a=seed>>>0;return function(){a=(a+0x6D2B79F5)>>>0;var t=a;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
-var SMALL=[3,3,4,4,4,5,5,6,6,7];
-function isBig(s){return s===5||s===10;}
-function dayLen(s){return 50+6*s;}
-function need(s){return 1+0.12*(s-1);}
-function bigNeed(s){return 3.2+0.25*s;}
-function reward(s){return Math.round(40*Math.pow(1.18,s-1));}
-function cost(lv){return Math.round(30*Math.pow(1.35,lv));}
-function rates(up){
-  var soil=1+0.12*up.soil;
-  return {auto:0.10*(1+0.3*up.fly)*soil,manual:0.20*(1+0.25*up.can)*soil,clean:0.5*(1+0.25*up.fly)};
+// 스테이지 번호 n은 1부터 끝없이 이어진다. 100개가 한 장(章)이고 표시는 "장-번호" (1-1 ~ 1-100, 2-1 ...)
+function chap(n){return Math.floor((n-1)/100)+1;}
+function loc(n){return (n-1)%100+1;}
+function label(n){return chap(n)+'-'+loc(n);}
+function isBig(n){return loc(n)%5===0;}
+function isDecade(n){return loc(n)%10===0;}
+function smallCount(n){return Math.min(chap(n)>1?9:8,3+Math.floor((loc(n)-1)/12));}
+function dayLen(n){return Math.min(240,55+3*n);}
+function need(n){var k=n-1;return 1+0.04*k+0.0035*k*k;}
+function bigNeed(n){return 3*need(n)+0.2;}
+function reward(n){return Math.round(30*(1+0.05*(n-1)));}
+function decadeBonus(n){return reward(n)*6;}
+function cost(lv){return Math.round(30*Math.pow(1.16,lv));}
+function questReward(q,total){return 5*cost(Math.floor((total||10*q)/3));} // q번째 퀘스트(강화 10×q회 달성) 보상
+var BUFF_MUL=1.5;
+function rates(up,buff){
+  var soil=1+0.12*up.soil,b=buff?BUFF_MUL:1;
+  return {auto:0.10*(1+0.3*up.fly)*soil*b,manual:0.20*(1+0.25*up.can)*soil*b,clean:0.5*(1+0.25*up.fly)};
 }
-function layout(s){
-  var n=SMALL[s-1],big=isBig(s),out=[],i;
-  if(big)out.push({x:W/2,y:250,need:bigNeed(s),big:true});
-  var rows=n<=3?[n]:(n<=6?[Math.ceil(n/2),Math.floor(n/2)]:[Math.ceil(n/2),Math.floor(n/2)]);
+function layout(n){
+  var c=smallCount(n),big=isBig(n),out=[],i;
+  if(big)out.push({x:W/2,y:250,need:bigNeed(n),big:true});
+  var rows=c<=3?[c]:[Math.ceil(c/2),Math.floor(c/2)];
   var y0=big?380:300,dy=big?100:110;
-  rows.forEach(function(c,r){
-    for(i=0;i<c;i++)out.push({x:W*(i+1)/(c+1),y:y0+r*dy,need:need(s),big:false});
+  rows.forEach(function(k,r){
+    for(i=0;i<k;i++)out.push({x:W*(i+1)/(k+1),y:y0+r*dy,need:need(n),big:false});
   });
   return out;
 }
-function newGame(stage,up,seed){
+function newGame(stage,up,seed,buff){
   var sp=layout(stage).map(function(o){return {x:o.x,y:o.y,need:o.need,big:o.big,p:0,weed:0,bloom:false};});
-  return {stage:stage,up:up,r:rates(up),rnd:rng(seed||1),sp:sp,t:0,day:dayLen(stage),status:'play',
+  return {stage:stage,up:up,r:rates(up,buff),rnd:rng(seed||1),sp:sp,t:0,day:dayLen(stage),status:'play',
     manual:false,wt:6,bloomed:0,total:sp.length,drops:[],taps:0,gain:0,fx:[],pointer:{x:0,y:0,on:false}};
 }
 function bloomCheck(g,s){
@@ -262,10 +279,10 @@ function update(g,dt,inp){
   g.manual=!!(inp&&inp.down);
   g.pointer.on=g.manual;if(inp){g.pointer.x=inp.x;g.pointer.y=inp.y;}
   // 풀: 3스테이지부터 가끔 새싹에 잡초가 낀다
-  if(g.stage>=3){
+  if(loc(g.stage)>=3||chap(g.stage)>1){
     g.wt-=dt;
     if(g.wt<=0){
-      g.wt=Math.max(5,14-g.stage)+g.rnd()*4;
+      g.wt=Math.max(4,12-0.06*g.stage)+g.rnd()*4;
       var c=g.sp.filter(function(x){return !x.bloom&&x.weed<=0;});
       if(c.length)c[Math.floor(g.rnd()*c.length)].weed=1;
     }
@@ -377,7 +394,7 @@ function saveAcc(o){lsSet('mmyg-acc',JSON.stringify(o));}
 // ---------------------------------------------------------------- save data (per account)
 var S=null,ACC=null;
 function defState(){
-  return {up:{fly:0,can:0,soil:0},dew:0,cleared:{},intro:false,last:Date.now(),
+  return {up:{fly:0,can:0,soil:0},dew:0,best:0,upTotal:0,quest:0,buff:0,intro:false,last:Date.now(),
     iap:{removeAds:false,subUntil:0},ad:{clears:0,last:0},daily:''};
 }
 function loadSave(id){
@@ -388,6 +405,8 @@ function loadSave(id){
       var o=JSON.parse(j);
       for(var k in d){if(o[k]===undefined)o[k]=d[k];}
       if(!o.iap)o.iap=d.iap;if(!o.ad)o.ad=d.ad;
+      if(o.cleared){for(var c in o.cleared){if(o.cleared[c]&&+c>o.best)o.best=+c;}delete o.cleared;}
+      if(!o.upTotal)o.upTotal=(o.up.fly||0)+(o.up.can||0)+(o.up.soil||0);
       return o;
     }
   }catch(e){}
@@ -552,35 +571,61 @@ function grant(p){
 
 // ---------------------------------------------------------------- story
 var STAGES=[
-  '문 앞 화단','이끼 낀 길','유리창 아래','작은 연못가','달봉오리 (큰 새싹)',
-  '라벤더 언덕','반딧불 정자','별비 온실','구름 다락','큰 달꽃 (큰 새싹)'
+  '문 앞 화단','이끼 낀 길','유리창 아래','작은 연못가','달봉오리 길',
+  '라벤더 언덕','반딧불 정자','별비 온실','구름 다락','큰 달꽃 정원'
 ];
-var INTRO='여우 하루는 돌아가신 달래 할머니의 낡은 온실을 물려받았어요.\n\n한때는 밤마다 달꽃이 환하게 피던 곳이었지만, 지금은 새싹들이 모두 잠들어 있어요.\n\n온실 곳곳에는 할머니가 남긴 편지가 숨어 있대요. 새싹을 깨울 때마다 한 통씩 열어 볼 수 있어요.';
+function stageName(n){return (chap(n)>1?'깊은 밤 ':'')+STAGES[Math.floor((loc(n)-1)/10)];}
+var INTRO='여우 하루는 돌아가신 달래 할머니의 낡은 온실을 물려받았어요.\n\n한때는 밤마다 달꽃이 환하게 피던 곳이었지만, 지금은 새싹들이 모두 잠들어 있어요.\n\n온실 곳곳에는 할머니의 편지가 숨어 있대요. 10번째 스테이지를 깰 때마다 한 통씩 열어 볼 수 있어요.';
 var LETTERS=[
-  '하루야, 이 온실에 온 걸 환영한단다.\n밤마다 달빛이 쉬어 가던 곳이야.\n오늘은 작은 새싹 셋에게 물 한 모금만 주렴. 서두르지 않아도 괜찮단다.',
-  '이끼 길은 미끄러우니 천천히 걸으렴.\n새싹은 눈에 보이지 않을 때도 조금씩 자라고 있단다.\n네가 쉬는 동안에도 말이야.',
-  '유리창 아래엔 심술쟁이 잡초가 자주 나. 미워하지는 마렴.\n그 애도 햇볕이 좋아서 온 거란다.\n그냥 톡, 하고 뽑아 주면 돼.',
+  '하루야, 이 온실에 온 걸 환영한단다.\n밤마다 달빛이 쉬어 가던 곳이야.\n서두르지 않아도 괜찮단다. 새싹은 눈에 보이지 않을 때도 조금씩 자라고 있으니까.',
+  '이끼 길은 미끄러우니 천천히 걸으렴.\n네가 쉬는 동안에도 정원은 자란단다.',
+  '유리창 아래엔 심술쟁이 잡초가 자주 나. 미워하지는 마렴.\n그 애도 햇볕이 좋아서 온 거란다. 그냥 톡, 하고 뽑아 주면 돼.',
   '연못에는 달이 비치는 밤이 있단다.\n물에 비친 달을 보다가 한참 앉아 있어도 좋아.\n쉬는 것도 정원 일의 절반이야.',
-  '달봉오리는 이 온실에서 가장 오래된 새싹이야.\n크게 자라려면 시간이 걸리지. 반딧불이들이 곁에 있어 줄 거야.\n그 애들은 밤새 지치지도 않거든.',
+  '달봉오리 길의 새싹들은 이 온실에서 가장 오래됐단다.\n크게 자라려면 시간이 걸리지. 반딧불이들이 곁에 있어 줄 거야.',
   '라벤더 향이 나니? 할머니가 잠이 안 올 때 맡던 향이란다.\n하루도 오늘은 푹 자렴.',
-  '정자에 앉으면 반딧불이 모여든단다.\n혼자 있어도 혼자가 아닌 느낌이 드는 곳이지.\n하루야, 외롭지 않니?',
+  '정자에 앉으면 반딧불이 모여든단다.\n혼자 있어도 혼자가 아닌 느낌이 드는 곳이지.',
   '별비가 오는 날엔 유리 지붕이 노래를 한단다.\n귀를 기울여 보렴. 새싹도 그 노래에 맞춰 자라.',
   '다락방엔 낡은 물뿌리개가 있어. 내 것이었지만 이제 네 것이란다.\n손잡이가 닳은 건 그동안 많이 사랑받았다는 뜻이야.',
   '하루야, 마지막 편지구나.\n달꽃이 피는 건 내가 한 일이 아니란다. 곁에서 기다려 준 누군가가 있었기 때문이야.\n이제 이 온실은 네 것이야. 고맙다, 하루야.'
 ];
-var ENDING='큰 달꽃이 활짝 피었어요.\n온실 가득 달빛이 번지고, 하루는 오랜만에 소리 내어 웃었어요.\n\n— 1부 끝 —\n(새 정원은 다음 업데이트에서 열려요)';
+var ALT=[
+  '온실 깊은 곳에도 달빛이 닿기 시작했단다.\n더 먼 정원까지 가 보지 않겠니?',
+  '밤이 깊을수록 별은 더 잘 보인단다.\n오늘도 천천히, 네 속도로.',
+  '새싹도 사람도 비슷하단다. 물을 주고 기다리면 언젠가 핀단다.',
+  '하루야, 쉬어 가도 괜찮아. 온실은 어디 가지 않는단다.',
+  '잡초도 가끔은 꽃이 되기도 한단다. 신기하지?'
+];
+var WHISPER=['새싹이 기지개를 켜요.','반딧불이 하품을 해요.','온실에 따뜻한 바람이 불어요.','잎사귀 위로 이슬이 또르르 굴러가요.','멀리서 올빼미 소리가 들려요.','달빛이 유리창에 살며시 앉아요.'];
+var ENDING='큰 달꽃이 활짝 피었어요.\n온실 가득 달빛이 번지고, 하루는 오랜만에 소리 내어 웃었어요.\n\n— 1장 끝 —\n온실의 더 깊은 문이 열렸어요. 2장은 더 깊은 밤의 정원이에요.';
+function letterFor(n){
+  if(!isDecade(n))return WHISPER[n%WHISPER.length];
+  var i=loc(n)/10-1;
+  return chap(n)===1?LETTERS[i]:ALT[(chap(n)*3+i)%ALT.length];
+}
 
 // ---------------------------------------------------------------- menu
-var G=null,running=false,last=0,inp={down:false,x:W/2,y:H/2,tapWeed:null},hintT=0,clockT=0;
+var G=null,running=false,last=0,inp={down:false,x:W/2,y:H/2,tapWeed:null},hintT=0,clockT=0,viewPage=null,buffKey='';
 var cv=$('cv'),ctx=cv.getContext('2d');
 var UPS=[
   {k:'fly',name:'반딧불',desc:'자동으로 키우는 속도와 잡초 청소 속도가 늘어요'},
   {k:'can',name:'물뿌리개',desc:'누르고 끌 때 키우는 속도가 늘어요'},
   {k:'soil',name:'영양 흙',desc:'모든 성장 속도가 레벨당 +12%'}
 ];
-var REC=[0,0,0,0,2,1,1,1,2,3]; // 모든 강화를 같은 레벨로 올렸을 때 손 안 대고 깰 수 있는 최소 레벨 (tools/sim.js)
-function clearedMax(){var m=0;for(var k in S.cleared){if(S.cleared[k])m=Math.max(m,+k);}return m;}
+var BUFF_MIN=20;
+function clearedMax(){return S.best||0;}
+function buffActive(){return S&&S.buff>Date.now();}
 function idleAmount(){return offlineReward(clearedMax(),(Date.now()-S.last)/60000,subActive());}
+function fmtLeft(ms){var s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2);}
+function renderBuff(force){
+  var on=buffActive(),key=on?'a':'i';
+  if(force||key!==buffKey){
+    buffKey=key;
+    $('buff').innerHTML='<h2>달빛 축복</h2><div class="idlerow"><span>'+(on?'성장 속도 +50% · 클리어 이슬 +50% · 남은 시간 <b class="bufft" id="bufft"></b>':'광고를 보면 '+BUFF_MIN+'분 동안 성장 속도 +50%, 클리어 이슬 +50%')+'</span>'+
+      '<button class="buy alt" id="buffgo">'+(on?'광고 보고 '+BUFF_MIN+'분으로 연장':'광고 보고 '+BUFF_MIN+'분 받기')+'</button></div>';
+  }
+  var t=$('bufft');if(t)t.textContent=fmtLeft(S.buff-Date.now());
+}
+setInterval(function(){try{if(scr==='menu'&&S)renderBuff(false);}catch(e){}},1000);
 function renderMenu(){
   $('coins').textContent=S.dew;
   $('acct').textContent=ACC.name+(subActive()?' · 달빛 패스':'');
@@ -591,23 +636,31 @@ function renderMenu(){
     '<button class="buy alt" id="claim2"'+(amt>0?'':' disabled')+'>광고 보고 '+(amt>0?amt*2:'×2')+'</button></div></div>';
   if(subActive()&&S.daily!==today())h+='<div class="idlerow" style="margin-top:8px"><span>달빛 패스 출석 보상</span><button class="buy" id="daily">200 받기</button></div>';
   $('idle').innerHTML=h;
-  h='<h2>강화</h2>';
+  renderBuff(true);
+  // 강화 (끝없이) + 강화 10회마다 퀘스트 보상
+  h='<h2>강화 <small class="muted">총 '+S.upTotal+'회</small></h2>';
+  var goal=(S.quest+1)*10,claimable=Math.floor(S.upTotal/10)-S.quest;
+  h+='<div class="up quest"><b>강화 퀘스트</b><span>'+(claimable>0?('강화 '+goal+'회 달성! 보상을 받아요'+(claimable>1?' (대기 '+claimable+'개)':'')):('강화 '+goal+'회 달성 ('+S.upTotal+'/'+goal+') · 달성 때마다 큰 이슬 보상'))+'</span>'+
+    '<button class="buy" id="quest"'+(claimable>0?'':' disabled')+'>'+(claimable>0?'+'+questReward(S.quest+1,10*(S.quest+1)):(goal-S.upTotal)+'회 남음')+'</button></div>';
   UPS.forEach(function(u){
     var lv=S.up[u.k],c=cost(lv);
     h+='<div class="up"><b>'+u.name+' Lv.'+lv+'</b><span>'+u.desc+'</span>'+
        '<button class="buy" data-k="'+u.k+'"'+(S.dew<c?' disabled':'')+'>'+c+' 이슬</button></div>';
   });
   $('ups').innerHTML=h;
-  var s='';
-  for(var i=1;i<=10;i++){
-    var boss=isBig(i),done=!!S.cleared[i],lock=(i>cm+1);
-    s+='<button class="st'+(boss?' boss':'')+(done?' done':'')+(lock?' locked':'')+'" data-s="'+i+'"'+(lock?' disabled':'')+'>'+(lock?'🔒':i)+
-       '<small>'+(done?'클리어':(boss?'큰 새싹':(lock?'':'')))+'</small></button>';
+  // 스테이지: 10개씩 페이지로 보여 준다
+  if(viewPage===null)viewPage=Math.floor(cm/10);
+  var p0=viewPage*10+1,front=Math.floor(cm/10);
+  var s='<div class="pager"><button class="link" id="pgprev"'+(viewPage<=0?' disabled':'')+'>◀ 이전</button><b>'+label(p0)+' ~ '+label(p0+9)+'</b><button class="link" id="pgnext"'+(viewPage>=front?' disabled':'')+'>다음 ▶</button></div><div class="stages">';
+  for(var i=p0;i<p0+10;i++){
+    var boss=isBig(i),done=(i<=cm),lock=(i>cm+1);
+    s+='<button class="st'+(boss?' boss':'')+(done?' done':'')+(lock?' locked':'')+'" data-s="'+i+'"'+(lock?' disabled':'')+'>'+(lock?'🔒':label(i))+
+       '<small>'+(done?'클리어':(isDecade(i)?'★ 보상':(boss?'큰 새싹':'')))+'</small></button>';
   }
-  $('stages').innerHTML=s;
+  $('stages').innerHTML=s+'</div>';
   var lh='<h2>할머니의 편지함</h2>',n=0;
-  for(i=1;i<=10;i++){if(S.cleared[i]){n++;lh+='<details class="letter"><summary>'+i+'. '+STAGES[i-1]+'</summary><p>'+LETTERS[i-1]+'</p></details>';}}
-  if(!n)lh+='<p class="help">스테이지를 클리어하면 편지가 한 통씩 열려요.</p>';
+  for(i=10;i<=100;i+=10){if(cm>=i){n++;lh+='<details class="letter"><summary>1-'+i+'. '+STAGES[i/10-1]+'</summary><p>'+LETTERS[i/10-1]+'</p></details>';}}
+  if(!n)lh+='<p class="help">10번째 스테이지를 클리어할 때마다 편지가 한 통씩 열려요.</p>';
   $('letters').innerHTML=lh;
   renderShop();
 }
@@ -635,10 +688,23 @@ $('idle').addEventListener('click',function(ev){
 });
 $('ups').addEventListener('click',function(ev){
   var b=ev.target.closest('.buy');if(!b||b.disabled)return;
+  if(b.id==='quest'){
+    var q=S.quest+1;S.dew+=questReward(q,10*q);S.quest=q;saveState();renderMenu();return;
+  }
   var k=b.getAttribute('data-k'),c=cost(S.up[k]);
-  if(S.dew>=c){S.dew-=c;S.up[k]++;saveState();renderMenu();}
+  if(S.dew>=c){S.dew-=c;S.up[k]++;S.upTotal++;saveState();renderMenu();}
+});
+$('buff').addEventListener('click',function(ev){
+  var b=ev.target.closest('button');if(!b||b.disabled)return;
+  b.disabled=true;
+  Ads.rewarded().then(function(ok){
+    if(ok){S.buff=Date.now()+BUFF_MIN*60000;saveState();}
+    renderBuff(true);
+  });
 });
 $('stages').addEventListener('click',function(ev){
+  var pb=ev.target.closest('.pager button');
+  if(pb){if(pb.disabled)return;viewPage+=(pb.id==='pgnext'?1:-1);renderMenu();return;}
   var b=ev.target.closest('.st');if(!b||b.disabled)return;
   startBattle(parseInt(b.getAttribute('data-s'),10));
 });
@@ -736,6 +802,7 @@ function enter(acc){
 }
 function goMenu(){
   running=false;
+  viewPage=null;
   show('menu');
   try{renderMenu();}catch(e){report(e);}
   try{renderUpd();}catch(e){report(e);}
@@ -744,11 +811,12 @@ function goMenu(){
 
 // ---------------------------------------------------------------- battle flow
 function startBattle(stage){
-  G=newGame(stage,S.up,Math.floor(Math.random()*65535));
+  G=newGame(stage,S.up,Math.floor(Math.random()*65535),buffActive());
+  G.buffed=buffActive();G.bonus=0;
   G.settled=false;G.continued=false;G.doubled=false;
-  inp.down=false;inp.tapWeed=null;hintT=(stage===1&&!S.cleared[1])?6:0;
+  inp.down=false;inp.tapWeed=null;hintT=(stage===1&&!S.best)?6:0;
   $('result').hidden=true;
-  $('btitle').textContent=stage+'. '+STAGES[stage-1];
+  $('btitle').textContent=label(stage)+' '+stageName(stage);
   show('battle');
   try{var p=refreshBanner();if(p&&p.catch)p.catch(function(){});}catch(e){report(e);}
   resize();
@@ -760,8 +828,13 @@ $('back').addEventListener('click',function(){running=false;goMenu();});
 function settle(){
   if(!G||G.settled||G.status==='play')return;
   G.settled=true;
+  if(G.buffed)G.gain=Math.round(G.gain*BUFF_MUL);
   S.dew+=G.gain;
-  if(G.status==='won'){S.cleared[G.stage]=true;S.ad.clears++;}
+  if(G.status==='won'){
+    if(G.stage>S.best)S.best=G.stage;
+    S.ad.clears++;
+    if(isDecade(G.stage)){G.bonus=decadeBonus(G.stage);S.dew+=G.bonus;}
+  }
   saveState();
 }
 function interstitialDue(){return !adsRemoved()&&S.ad.clears>=4&&Date.now()-S.ad.last>240000;}
@@ -773,7 +846,7 @@ function leaveResult(next){
     Ads.interstitial().then(function(){S.ad.clears=0;S.ad.last=Date.now();saveState();next();});
   }else next();
 }
-$('rnext').addEventListener('click',function(){leaveResult(function(){startBattle(Math.min(10,G.stage+1));});});
+$('rnext').addEventListener('click',function(){leaveResult(function(){startBattle(G.stage+1);});});
 $('rretry').addEventListener('click',function(){leaveResult(function(){startBattle(G.stage);});});
 $('rmenu').addEventListener('click',function(){leaveResult(goMenu);});
 $('rad').addEventListener('click',function(){
@@ -826,7 +899,7 @@ function hud(){
   var left=Math.max(0,G.day-G.t),f=left/G.day;
   $('suntxt').textContent='해질녘까지 '+Math.ceil(left)+'초';
   var sb=$('sunbar');sb.style.width=(f*100)+'%';sb.className='sun'+(f<0.25?' late':'');
-  var m=$('mode');m.textContent=G.manual?'물뿌리개':'반딧불';m.className='mode'+(G.manual?' manual':'');
+  var m=$('mode');m.textContent=(G.manual?'물뿌리개':'반딧불')+(G.buffed?' ✨':'');m.className='mode'+(G.manual?' manual':'');
 }
 function finish(){
   running=false;
@@ -835,15 +908,16 @@ function finish(){
   var gain=G.gain;
   $('rt').textContent=won?'새싹이 모두 피었어요':'해가 저물었어요';
   $('rt').style.color=won?'var(--ok)':'var(--accent)';
-  var txt=won?LETTERS[G.stage-1]:'새싹들이 잠들었지만 다시 아침이 오면 이어서 자랄 거예요.\n강화를 하거나 직접 물을 주면 더 빨리 피울 수 있어요.';
-  if(won&&G.stage===10)txt+='\n\n'+ENDING;
+  var txt=won?letterFor(G.stage):'새싹들이 잠들었지만 다시 아침이 오면 이어서 자랄 거예요.\n강화를 하거나 직접 물을 주면 더 빨리 피울 수 있어요.';
+  if(won&&G.stage===100)txt+='\n\n'+ENDING;
   $('rp').textContent=txt;
-  $('rg').textContent='+'+gain+' 이슬'+(won?'':' (피어난 만큼)');
+  $('rg').textContent='+'+gain+' 이슬'+(won?'':' (피어난 만큼)')+(G.buffed?' · 축복 +50%':'')+(G.bonus?'\n★ 10스테이지 보너스 +'+G.bonus:'');
   var rad=$('rad');rad.disabled=false;
   if(won){rad.hidden=false;rad.textContent='광고 보고 이슬 2배 (+'+gain+')';}
   else if(!G.continued){rad.hidden=false;rad.textContent='광고 보고 해 늘리기 (+35초)';}
   else rad.hidden=true;
-  $('rnext').style.display=(won&&G.stage<10)?'':'none';
+  $('rnext').style.display=won?'':'none';
+  $('rnext').textContent='다음 스테이지 '+label(G.stage+1);
   $('rretry').textContent=won?'다시 가꾸기':'다시 도전';
   $('result').hidden=false;
 }
@@ -929,10 +1003,10 @@ function draw(){
   }
   if(hintT>0){
     ctx.globalAlpha=Math.min(1,hintT);
-    ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(20,20,320,70);
+    ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(20,150,320,70);
     ctx.fillStyle='#fff';ctx.font=font(15);ctx.textAlign='center';
-    ctx.fillText('손을 떼면 반딧불이 키워줘요',W/2,47);
-    ctx.fillText('누르고 끌면 물뿌리개로 더 빨리!',W/2,73);
+    ctx.fillText('손을 떼면 반딧불이 키워줘요',W/2,177);
+    ctx.fillText('누르고 끌면 물뿌리개로 더 빨리!',W/2,203);
     ctx.globalAlpha=1;
   }
 }
