@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="mmyg-version" content="20261111030504">
+<script>
+/* 자동 업데이트 (앱 안에서 게임 화면과 규칙만 교체) — tools/make-www.py 가 게임 HTML 맨 앞에 끼워 넣는다.
+ * 어떤 파일로 시작할지는 tools/shell.html(앱의 index.html)이 고른다. 이 코드는 시작한 뒤의 일만 한다.
+ *
+ *  1. 시작하고 1.5초 뒤, 그리고 앱으로 돌아올 때(마지막 확인이 10분 넘었으면) 서버의 version.json 을 확인한다.
+ *     지금 실행 중인 버전보다 높은 버전이 있으면 game.html 을 받아 저장해 둔다(localStorage).
+ *  2. 받아 둔 버전은 다음 실행 때 자동으로 적용되고, 화면의 "지금 적용"(MMYG.apply)으로 바로 적용할 수도 있다.
+ *  3. 게임이 정상으로 시작했다고 MMYG.ok()를 부르면 기록한다. 이 기록이 없으면 다음 실행 때 그 버전은 버려진다.
+ *  인터넷이 없거나 서버가 응답하지 않으면 아무 일도 일어나지 않는다.
+ *  앱 자체(광고, 결제, 권한 같은 네이티브 부분)는 이 방법으로 바뀌지 않는다. 그럴 때는 APK를 다시 설치해야 한다.
+ */
+(function () {
+  var VER = 20261111030504;
+  var BASES = ["https://raw.githubusercontent.com/tlsgusdlf33/claude-M2/gh-pages/"];
+  var K = { html: 'mmyg-upd-html', ver: 'mmyg-upd-ver', good: 'mmyg-upd-good', bad: 'mmyg-upd-bad' };
+  function g(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
+  function s(k, v) { try { window.localStorage.setItem(k, v); } catch (e) {} }
+
+  var M = window.MMYG = { version: VER, state: 'idle', onchange: null };
+  function set(st) { M.state = st; try { if (M.onchange) M.onchange(st); } catch (e) {} }
+
+  var cv = +g(K.ver) || 0;                      // 받아 둔 새 버전 (없으면 0)
+  if (cv > VER && g(K.html)) set('ready');
+
+  M.ok = function () { s(K.good, String(VER)); };
+  M.apply = function () { window.location.reload(); };
+
+  function getText(url) {
+    return fetch(url, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); });
+  }
+  function tryBase(i, manual) {
+    if (i >= BASES.length) { set(manual ? 'offline' : 'idle'); return Promise.resolve(); }
+    var base = BASES[i], t = Date.now();
+    return getText(base + 'version.json?t=' + t).then(function (txt) {
+      var info = JSON.parse(txt), n = +info.version || 0, have = Math.max(VER, cv), bad = +g(K.bad) || 0;
+      if (n <= have || n === bad) { set(cv > VER ? 'ready' : 'latest'); return; }
+      set('downloading');
+      return getText(base + (info.file || 'game.html') + '?v=' + n).then(function (body) {
+        var okDoc = body.length > 20000 && body.indexOf('name="mmyg-version" content="' + n + '"') > 0 && body.indexOf('showLogin();') > 0;
+        if (!okDoc) throw new Error('bad update');
+        s(K.html, body); s(K.ver, String(n)); cv = n;
+        set('ready');
+      });
+    }).catch(function () { return tryBase(i + 1, manual); });
+  }
+  M.check = function (manual) {
+    if (M.state === 'checking' || M.state === 'downloading') return Promise.resolve();
+    if (M.state !== 'ready') set('checking');
+    return tryBase(0, !!manual);
+  };
+  var lastCheck = 0;
+  function auto() { lastCheck = Date.now(); M.check(false); }
+  window.addEventListener('load', function () { setTimeout(auto, 1500); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && Date.now() - lastCheck > 600000) auto();
+  });
+})();
+
+</script>
+<title>달빛 온실</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;700&display=swap">
+<style>
+/* Layout: one-screen mobile app. Menu (upgrades + 10 stages) <-> battle (portrait canvas, HUD below). */
+:root{
+  --bg:#13212b; --panel:#1b2e3a; --panel-2:#233a48; --line:#34505f;
+  --fg:#eef2ee; --muted:#9fb0ba; --accent:#ffd28a; --accent-ink:#2a1b00;
+  --danger:#ff5d4d; --ok:#9be3b0;
+  --f-display:"Jua","Noto Sans KR",system-ui,sans-serif;
+  --f-body:"Noto Sans KR",system-ui,-apple-system,"Malgun Gothic",sans-serif;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:0;overflow-x:hidden;
+}
+*{box-sizing:border-box}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#app{max-width:460px;height:100%;margin:0 auto;position:relative}
+.screen{height:100%;display:flex;flex-direction:column}
+.screen[hidden]{display:none!important}
+
+/* ---------- menu ---------- */
+#menu{overflow-y:auto;padding-block:14px 20px;gap:14px}
+.head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+.head h1{font-family:var(--f-display);font-weight:400;font-size:34px;line-height:1.05;margin:0;text-wrap:balance}
+.head p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.coins{font-family:var(--f-display);font-size:22px;color:var(--accent);white-space:nowrap;font-variant-numeric:tabular-nums}
+.coins small{font-family:var(--f-body);font-size:12px;color:var(--muted);margin-left:4px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.card h2{font-family:var(--f-display);font-weight:400;font-size:18px;margin:0 0 8px;letter-spacing:.02em}
+.up{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.up:first-of-type{border-top:0}
+.up b{font-weight:700}
+.up span{color:var(--muted);font-size:12.5px}
+.buy{grid-row:1 / span 2;grid-column:2;background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:9px 12px;min-width:92px;font-weight:700;font-variant-numeric:tabular-nums}
+.buy:disabled{background:var(--panel-2);color:var(--muted);cursor:not-allowed}
+.idlerow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;font-size:13px;color:var(--muted)}
+.idlerow .buy{grid-row:auto;grid-column:auto}
+.dogrow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.dog{display:grid;gap:1px;justify-items:center;padding:10px 4px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2)}
+.dog small{color:var(--muted);font-size:11px}
+.dog .de{font-size:28px;line-height:1.1}
+.dog.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+#dogdesc{margin-top:8px}
+.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.st{position:relative;aspect-ratio:1;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);font-family:var(--f-display);font-size:22px;display:grid;place-items:center;padding:0}
+.st:hover{border-color:var(--accent)}
+.st small{position:absolute;bottom:4px;left:0;right:0;text-align:center;font-family:var(--f-body);font-size:10px;color:var(--muted);letter-spacing:.06em}
+.st.boss{border-color:var(--danger)}
+.st.boss small{color:var(--danger);font-weight:700}
+.st.done small{color:var(--ok)}
+.help{font-size:13px;color:var(--muted);margin:0}
+.help b{color:var(--fg)}
+.reset{align-self:flex-start;background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;padding:4px 0}
+
+/* ---------- battle ---------- */
+#battle{gap:8px;padding-block:10px 12px;position:relative}
+.bar{display:flex;align-items:center;gap:10px;min-height:34px}
+.back{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px}
+.title{font-family:var(--f-display);font-size:18px;flex:1;white-space:nowrap}
+.mode{font-size:12px;font-weight:700;border-radius:999px;padding:4px 10px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.mode.manual{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+#stagebox{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+#cv{display:block;border-radius:10px;border:1px solid var(--line);touch-action:none;background:#cfe8e0}
+.hud{display:grid;grid-template-columns:1fr 132px;gap:10px;align-items:stretch}
+.hp{display:flex;flex-direction:column;justify-content:center;gap:4px;font-size:12px;color:var(--muted)}
+.meter{height:12px;border-radius:6px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden}
+.meter i{display:block;height:100%;width:100%;background:var(--ok);transition:width .12s linear}
+.meter i.low{background:var(--danger)}
+#ult{border:0;border-radius:10px;font-family:var(--f-display);font-size:17px;padding:10px 6px;color:var(--muted);
+  background:linear-gradient(90deg,var(--accent-dim,#5b4a14) var(--p,0%),var(--panel-2) var(--p,0%));border:1px solid var(--line)}
+#ult.ready{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);animation:pulse .9s ease-in-out infinite}
+@keyframes pulse{50%{transform:scale(1.04)}}
+@media (prefers-reduced-motion:reduce){#ult.ready{animation:none}}
+#result{position:absolute;inset:0;background:rgba(10,16,22,.82);display:grid;place-items:center;padding:16px}
+#result[hidden]{display:none!important}
+.rbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px;text-align:center}
+.rbox h2{font-family:var(--f-display);font-weight:400;font-size:30px;margin:0}
+.rbox p{margin:0;color:var(--muted)}
+.rbox .gain{font-family:var(--f-display);font-size:24px;color:var(--accent)}
+.rbtn{border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:11px;font-weight:700}
+.rbtn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+
+/* ---------- accounts, ads, shop ---------- */
+:root{--bh:0px}
+#menu{padding-block:14px calc(20px + var(--bh))}
+.link{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font-size:inherit}
+#login{justify-content:center}
+.lg-wrap{margin:0 auto;width:100%;max-width:340px;display:flex;flex-direction:column;gap:12px;text-align:center;padding-block:24px}
+.lg-title{font-family:var(--f-display);font-weight:400;font-size:44px;line-height:1.05;margin:0}
+.lg-sub{margin:0 0 10px;color:var(--muted)}
+.lg-btns{display:flex;flex-direction:column;gap:10px}
+.lg{position:relative;display:flex;justify-content:center;align-items:center;gap:8px;padding:15px 12px;border-radius:10px;font-weight:700;font-size:16px;border:1px solid var(--line)}
+.lg:disabled{opacity:.6;cursor:wait}
+.lg.kakao{background:#fee500;color:#191600;border-color:#fee500}
+.lg.google{background:#ffffff;color:#1f1f1f;border-color:#dadce0}
+.lg.guest{background:var(--panel-2);color:var(--fg)}
+.badge{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-style:normal;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.72);color:#fff}
+.lg.kakao .badge,.lg.google .badge{background:rgba(0,0,0,.72)}
+.lg-upd{margin:0;font-size:13px;color:var(--accent)}
+.lg-err{margin:0;color:var(--danger);font-size:12.5px;user-select:text;-webkit-user-select:text;word-break:break-all}
+.lg-note{margin:10px 0 0;font-size:12.5px;color:var(--muted);text-wrap:pretty}
+.idlebtns{display:grid;gap:6px}
+.idlebtns .buy{grid-row:auto;grid-column:auto;min-width:110px}
+.buy.alt{background:var(--panel-2);color:var(--accent);border:1px solid var(--accent)}
+.buy.alt:disabled{color:var(--muted);border-color:var(--line)}
+.shopfoot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+.shopfoot .mode{border:0;padding:0;font-weight:400}
+.rbtn.ad{border-color:var(--accent);color:var(--accent)}
+#banner{position:fixed;left:0;right:0;bottom:env(safe-area-inset-bottom,0px);height:50px;margin:0 auto;max-width:460px;background:#ffffff;color:#222;border-top:1px solid #cfd5da;display:flex;align-items:center;justify-content:center;font-size:12.5px;z-index:20;text-align:center;padding:0 8px}
+#banner[hidden],#adov[hidden],#dlg[hidden]{display:none!important}
+#adov,#dlg{position:fixed;inset:0;display:grid;place-items:center;padding:16px;z-index:40;background:rgba(6,10,14,.88)}
+#dlg{z-index:50}
+.adbox{background:#ffffff;color:#1c2227;border-radius:12px;padding:20px;width:100%;max-width:320px;text-align:center;display:flex;flex-direction:column;gap:10px}
+.adbox h2{font-family:var(--f-display);font-weight:400;font-size:24px;margin:0}
+.adbox p{margin:0;color:#4a5560}
+.adtag{align-self:flex-start;font-size:11px;font-weight:700;border:1px solid #9aa5ae;border-radius:4px;padding:1px 6px;color:#4a5560}
+#dlgm{white-space:pre-line}
+.dlgb{display:flex;flex-direction:column;gap:8px}
+
+
+/* ---------- 달빛 온실 ---------- */
+#battle{padding-block:10px calc(12px + var(--bh))}
+.hud{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.meter i.sun{background:#ffb867}
+.meter i.sun.late{background:#e58fb0}
+.rbox p#rp{white-space:pre-line;text-align:left;line-height:1.6}
+.st.locked{opacity:.45}
+.st.boss small{color:var(--accent)}
+.st.boss{border-color:var(--accent)}
+.letter{border-top:1px solid var(--line);padding:8px 0}
+.letter:first-of-type{border-top:0}
+.letter summary{cursor:pointer;font-weight:700}
+.letter p{margin:6px 0 0;color:var(--muted);white-space:pre-line;line-height:1.6}
+.pager{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.pager .link:disabled{color:var(--muted);text-decoration:none;opacity:.5}
+.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.st{font-size:16px}
+.muted{color:var(--muted);font-family:var(--f-body);font-size:12px}
+.bufft{color:var(--accent);font-variant-numeric:tabular-nums}
+.rbox .gain{white-space:pre-line;font-size:20px}
+</style>
+<style>html{padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}html,body{margin:0;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}body{-webkit-user-select:none;user-select:none}</style>
+</head>
+<body>
+<div id="app">
+  <section id="login" class="screen" hidden>
+    <div class="lg-wrap">
+      <h1 class="lg-title">달빛 온실</h1>
+      <p class="lg-sub">계정을 고르면 온실 문이 열려요</p>
+      <div class="lg-btns" id="lgbtns">
+        <button class="lg kakao" data-t="kakao">카카오계정으로 시작<em class="badge" hidden>마지막 접속</em></button>
+        <button class="lg google" data-t="google">구글 계정으로 시작<em class="badge" hidden>마지막 접속</em></button>
+        <button class="lg guest" data-t="guest">게스트로 시작<em class="badge" hidden>마지막 접속</em></button>
+      </div>
+      <p class="lg-upd" id="lgupd" hidden></p>
+      <p class="lg-err" id="lgerr" hidden></p>
+      <p class="lg-note">카카오와 구글 로그인은 연동 전이라 테스트 모드예요. 실제 계정 정보는 사용하지 않아요. 게스트 기록은 이 폰에 저장돼요. 앱을 닫거나 업데이트해도 이어지지만, 앱을 삭제하거나 폰을 바꾸면 이어지지 않아요.</p>
+    </div>
+  </section>
+
+  <section id="menu" class="screen" hidden>
+    <div class="head">
+      <div>
+        <h1>달빛 온실</h1>
+        <p><span id="acct"></span> · <button class="link" id="switch">계정 전환</button></p>
+      </div>
+      <div class="coins"><span id="coins">0</span><small>이슬</small></div>
+    </div>
+    <div class="card" id="updcard" hidden></div>
+    <div class="card" id="idle"></div>
+    <div class="card" id="buff"></div>
+    <div class="card">
+      <h2>스테이지</h2>
+      <div id="stages"></div>
+    </div>
+    <div class="card" id="ups"></div>
+    <div class="card" id="letters"></div>
+    <div class="card" id="shop"></div>
+    <p class="help"><b>손을 떼면 반딧불이 알아서 키워줘요.</b> 화면을 누르고 끌면 물뿌리개로 훨씬 빨리 키울 수 있고, 새싹에 낀 잡초는 톡 눌러서 뽑아요. 해가 지기 전에 못 피워도 벌칙은 없어요.</p>
+    <p class="help" id="verline" hidden></p>
+    <button class="reset" id="reset">진행 상황 초기화</button>
+  </section>
+
+  <section id="battle" class="screen" hidden>
+    <div class="bar">
+      <button class="back" id="back">나가기</button>
+      <div class="title" id="btitle">스테이지 1</div>
+      <div class="mode" id="mode">자동</div>
+    </div>
+    <div id="stagebox"><canvas id="cv"></canvas></div>
+    <div class="hud">
+      <div class="hp"><span id="hptxt">피어난 꽃</span><div class="meter"><i id="hpbar"></i></div></div>
+      <div class="hp"><span id="suntxt">해질녘까지</span><div class="meter"><i id="sunbar" class="sun"></i></div></div>
+    </div>
+    <div id="result" hidden>
+      <div class="rbox">
+        <h2 id="rt"></h2>
+        <p id="rp"></p>
+        <div class="gain" id="rg"></div>
+        <button class="rbtn ad" id="rad" hidden></button>
+        <button class="rbtn primary" id="rnext">다음 스테이지</button>
+        <button class="rbtn" id="rretry">다시 가꾸기</button>
+        <button class="rbtn" id="rmenu">온실로 돌아가기</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="banner" hidden>테스트 배너 광고 · 광고 제거를 구매하면 사라져요</div>
+<div id="adov" hidden>
+  <div class="adbox">
+    <div class="adtag">광고</div>
+    <h2 id="adt">테스트 광고</h2>
+    <p id="adm"></p>
+    <button class="rbtn primary" id="adc" disabled>3초</button>
+  </div>
+</div>
+<div id="dlg" hidden>
+  <div class="rbox">
+    <h2 id="dlgt"></h2>
+    <p id="dlgm"></p>
+    <div id="dlgb" class="dlgb"></div>
+  </div>
+</div>
+
+<script>
+// ==CORE_START==
+var W=360,H=560;
+// 달빛 온실: 새싹들을 모두 피우면 클리어. 해가 지기 전에 피우지 못하면 새싹들이 잠들 뿐 벌칙은 없다.
+function rng(seed){var a=seed>>>0;return function(){a=(a+0x6D2B79F5)>>>0;var t=a;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
+// 스테이지 번호 n은 1부터 끝없이 이어진다. 100개가 한 장(章)이고 표시는 "장-번호" (1-1 ~ 1-100, 2-1 ...)
+function chap(n){return Math.floor((n-1)/100)+1;}
+function loc(n){return (n-1)%100+1;}
+function label(n){return chap(n)+'-'+loc(n);}
+function isBig(n){return loc(n)%5===0;}
+function isDecade(n){return loc(n)%10===0;}
+function smallCount(n){return Math.min(chap(n)>1?9:8,3+Math.floor((loc(n)-1)/12));}
+function dayLen(n){return Math.min(240,55+3*n);}
+function need(n){var k=n-1;return 1+0.04*k+0.0035*k*k;}
+function bigNeed(n){return 3*need(n)+0.2;}
+function reward(n){return Math.round(30*(1+0.05*(n-1)));}
+function decadeBonus(n){return reward(n)*6;}
+function cost(lv){return Math.round(30*Math.pow(1.16,lv));}
+function questReward(q,total){return 5*cost(Math.floor((total||10*q)/3));} // q번째 퀘스트(강화 10×q회 달성) 보상
+var BUFF_MUL=1.5;
+function rates(up,buff){
+  var soil=1+0.12*up.soil,b=buff?BUFF_MUL:1;
+  return {auto:0.10*(1+0.3*up.fly)*soil*b,manual:0.20*(1+0.25*up.can)*soil*b,clean:0.5*(1+0.25*up.fly)};
+}
+function layout(n){
+  var c=smallCount(n),big=isBig(n),out=[],i;
+  if(big)out.push({x:W/2,y:250,need:bigNeed(n),big:true});
+  var rows=c<=3?[c]:[Math.ceil(c/2),Math.floor(c/2)];
+  var y0=big?380:300,dy=big?100:110;
+  rows.forEach(function(k,r){
+    for(i=0;i<k;i++)out.push({x:W*(i+1)/(k+1),y:y0+r*dy,need:need(n),big:false});
+  });
+  return out;
+}
+function newGame(stage,up,seed,buff){
+  var sp=layout(stage).map(function(o){return {x:o.x,y:o.y,need:o.need,big:o.big,p:0,weed:0,bloom:false};});
+  return {stage:stage,up:up,r:rates(up,buff),rnd:rng(seed||1),sp:sp,t:0,day:dayLen(stage),status:'play',
+    manual:false,wt:6,bloomed:0,total:sp.length,drops:[],taps:0,gain:0,fx:[],pointer:{x:0,y:0,on:false}};
+}
+function bloomCheck(g,s){
+  if(!s.bloom&&s.p>=s.need){s.p=s.need;s.bloom=true;s.weed=0;g.bloomed++;g.fx.push({x:s.x,y:s.y,age:0,big:s.big});}
+}
+// inp: {down:bool,x,y,tapWeed:{x,y}|null}
+function update(g,dt,inp){
+  if(g.status!=='play')return;
+  dt=Math.min(dt,0.1);
+  g.t+=dt;
+  var i,s,gm=1;
+  g.manual=!!(inp&&inp.down);
+  g.pointer.on=g.manual;if(inp){g.pointer.x=inp.x;g.pointer.y=inp.y;}
+  // 풀: 3스테이지부터 가끔 새싹에 잡초가 낀다
+  if(loc(g.stage)>=3||chap(g.stage)>1){
+    g.wt-=dt;
+    if(g.wt<=0){
+      g.wt=Math.max(4,12-0.06*g.stage)+g.rnd()*4;
+      var c=g.sp.filter(function(x){return !x.bloom&&x.weed<=0;});
+      if(c.length)c[Math.floor(g.rnd()*c.length)].weed=1;
+    }
+  }
+  // 직접 조작: 물뿌리개 아래 새싹은 빨리 자라고, 잡초를 톡 누르면 바로 뽑힌다
+  if(inp&&inp.tapWeed){
+    for(i=0;i<g.sp.length;i++){s=g.sp[i];
+      var d=Math.hypot(s.x-inp.tapWeed.x,s.y-30-inp.tapWeed.y);
+      if(s.weed>0&&d<(s.big?60:42)){s.weed=0;g.taps++;}
+    }
+    inp.tapWeed=null;
+  }
+  if(g.manual){
+    for(i=0;i<g.sp.length;i++){s=g.sp[i];
+      if(s.bloom)continue;
+      if(Math.hypot(s.x-inp.x,s.y-30-inp.y)<(s.big?70:52)){
+        s.p+=g.r.manual*dt*(1-0.7*s.weed);bloomCheck(g,s);
+      }
+    }
+  }
+  // 자동: 반딧불이 잡초를 먼저 치우고, 없으면 가장 많이 자란 새싹부터 물을 준다
+  var weedy=null,tgt=null;
+  for(i=0;i<g.sp.length;i++){s=g.sp[i];
+    if(s.weed>0&&(!weedy||s.weed>weedy.weed))weedy=s;
+    if(!s.bloom&&(!tgt||s.p/s.need>tgt.p/tgt.need))tgt=s;
+  }
+  if(weedy){weedy.weed=Math.max(0,weedy.weed-g.r.clean*dt);}
+  else if(tgt){tgt.p+=g.r.auto*dt;bloomCheck(g,tgt);}
+  for(i=g.fx.length-1;i>=0;i--){g.fx[i].age+=dt;if(g.fx[i].age>1.6)g.fx.splice(i,1);}
+  if(g.bloomed>=g.total){g.status='won';g.gain=reward(g.stage);}
+  else if(g.t>=g.day){g.status='dusk';g.gain=Math.round(reward(g.stage)*0.5*g.bloomed/g.total);}
+}
+function progress(g){var a=0,b=0;g.sp.forEach(function(s){a+=Math.min(s.p,s.need);b+=s.need;});return a/b;}
+function offlineReward(clearedMax,minutes,sub){
+  var rate=clearedMax?(2+reward(clearedMax)*0.05):0,cap=sub?360:120;
+  return Math.floor(rate*Math.max(0,Math.min(minutes,cap)));
+}
+// ==CORE_END==
+
+// ---------------------------------------------------------------- platform helpers
+var $=function(id){return document.getElementById(id);};
+function plugin(name){
+  try{var C=window.Capacitor;if(C&&C.isNativePlatform&&C.isNativePlatform()&&C.Plugins&&C.Plugins[name])return C.Plugins[name];}catch(e){}
+  return null;
+}
+// 플러그인(광고, 결제, 기기 ID)은 폰마다 상태가 다를 수 있다. 호출은 항상 pcall로 한다.
+// 함수가 없거나, 바로 오류가 나거나, 응답이 없어도 화면과 로그인은 멈추지 않는다.
+function pcall(P,m,arg,ms){
+  return new Promise(function(res,rej){
+    var done=false,t=setTimeout(function(){if(!done){done=true;rej(new Error(m+' 응답 없음'));}},ms||5000);
+    function ok(v){if(!done){done=true;clearTimeout(t);res(v);}}
+    function no(e){if(!done){done=true;clearTimeout(t);rej(e);}}
+    try{
+      if(!P||typeof P[m]!=='function')throw new Error(m+' 없음');
+      Promise.resolve(P[m](arg)).then(ok,no);
+    }catch(e){no(e);}
+  });
+}
+function padd(P,n,f){try{if(P&&typeof P.addListener==='function')return P.addListener(n,f);}catch(e){}return null;}
+var bootErrs=0,errLog=[];
+function report(e){
+  bootErrs++;
+  var msg=String((e&&e.message)||e||'오류').slice(0,160);
+  errLog.push(msg);if(errLog.length>5)errLog.shift();
+  try{localStorage.setItem('mmyg-errlog',JSON.stringify(errLog));}catch(x){}
+  var el=document.getElementById('lgerr'),lg=document.getElementById('login');
+  if(el&&lg&&!lg.hidden){el.hidden=false;el.textContent='문제가 생겼어요: '+msg;}
+}
+window.addEventListener('error',function(ev){report(ev.error||ev.message);});
+window.addEventListener('unhandledrejection',function(ev){report(ev.reason);});
+function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+function rand(){var s='';for(var i=0;i<4;i++)s+=Math.floor(Math.random()*4294967296).toString(16);return s;}
+function today(){var d=new Date();return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();}
+function fmtDate(ts){var d=new Date(ts);return (d.getMonth()+1)+'월 '+d.getDate()+'일';}
+
+function dialog(title,msg,buttons){
+  return new Promise(function(res){
+    $('dlgt').textContent=title;$('dlgm').textContent=msg;
+    var h='';
+    buttons.forEach(function(b,i){h+='<button class="rbtn'+(b.primary?' primary':'')+'" data-i="'+i+'">'+b.label+'</button>';});
+    $('dlgb').innerHTML=h;$('dlg').hidden=false;
+    $('dlgb').onclick=function(ev){
+      var b=ev.target.closest('button');if(!b)return;
+      $('dlg').hidden=true;res(parseInt(b.getAttribute('data-i'),10));
+    };
+  });
+}
+
+// ---------------------------------------------------------------- accounts
+// 카카오, 구글은 실제 로그인 SDK를 연동하기 전까지 테스트 계정으로 동작한다.
+// 게스트는 기기 고유 ID(안드로이드 ANDROID_ID)로 계정을 만들어 같은 폰에서는 계속 이어진다.
+var Auth={
+  guest:function(){
+    var cached=lsGet('mmyg-dev-id');
+    if(cached)return Promise.resolve({id:'guest-'+cached,type:'guest',name:'게스트'});
+    return pcall(plugin('Device'),'getId',undefined,3000).then(function(r){return r&&r.identifier;}).catch(function(){return null;}).then(function(id){
+      if(id)lsSet('mmyg-dev-id',id);
+      else{id=lsGet('mmyg-dev');if(!id){id=rand();lsSet('mmyg-dev',id);}}
+      return {id:'guest-'+id,type:'guest',name:'게스트'};
+    });
+  },
+  kakao:function(){return Promise.resolve({id:'kakao-test',type:'kakao',name:'카카오 테스트 계정'});},
+  google:function(){return Promise.resolve({id:'google-test',type:'google',name:'구글 테스트 계정'});}
+};
+function loadAcc(){try{var j=lsGet('mmyg-acc');if(j)return JSON.parse(j);}catch(e){}return {last:null};}
+function saveAcc(o){lsSet('mmyg-acc',JSON.stringify(o));}
+
+// ---------------------------------------------------------------- save data (per account)
+var S=null,ACC=null;
+function defState(){
+  return {up:{fly:0,can:0,soil:0},dew:0,best:0,upTotal:0,quest:0,buff:0,intro:false,last:Date.now(),
+    iap:{removeAds:false,subUntil:0},ad:{clears:0,last:0},daily:''};
+}
+function loadSave(id){
+  var d=defState();
+  try{
+    var j=lsGet('mmyg-save-'+id);
+    if(j){
+      var o=JSON.parse(j);
+      for(var k in d){if(o[k]===undefined)o[k]=d[k];}
+      if(!o.iap)o.iap=d.iap;if(!o.ad)o.ad=d.ad;
+      if(o.cleared){for(var c in o.cleared){if(o.cleared[c]&&+c>o.best)o.best=+c;}delete o.cleared;}
+      if(!o.upTotal)o.upTotal=(o.up.fly||0)+(o.up.can||0)+(o.up.soil||0);
+      return o;
+    }
+  }catch(e){}
+  return d;
+}
+function saveState(){if(ACC)lsSet('mmyg-save-'+ACC.id,JSON.stringify(S));}
+function subActive(){return S&&S.iap.subUntil>Date.now();}
+function adsRemoved(){return !!(S&&(S.iap.removeAds||subActive()));}
+
+// ---------------------------------------------------------------- ads (test ads)
+// 앱에서는 구글 AdMob 테스트 광고, 브라우저 미리보기에서는 가짜 광고를 보여준다.
+// 출시할 때는 ADS의 ID를 실제 광고 단위 ID로 바꾸고 testing을 false로 한다.
+var ADS={
+  testing:true,
+  appId:'ca-app-pub-3940256099942544~3347511713',
+  banner:'ca-app-pub-3940256099942544/6300978111',
+  inter:'ca-app-pub-3940256099942544/1033173712',
+  reward:'ca-app-pub-3940256099942544/5224354917'
+};
+var Ads=(function(){
+  var A=null,ready=null,bannerOn=false,bannerMade=false;
+  function setBH(px){document.documentElement.style.setProperty('--bh',px+'px');}
+  function init(){
+    if(ready)return ready;
+    A=plugin('AdMob');
+    if(!A){ready=Promise.resolve(false);return ready;}
+    ready=pcall(A,'initialize',{initializeForTesting:ADS.testing},8000).then(function(){
+      padd(A,'bannerAdSizeChanged',function(i){if(i&&i.height&&bannerOn)setBH(i.height);});
+      return true;
+    }).catch(function(){A=null;return false;});
+    return ready;
+  }
+  function mock(title,sec,reward){
+    return new Promise(function(res){
+      var left=sec,btn=$('adc');
+      $('adt').textContent=title;
+      $('adm').textContent=reward?'끝까지 보면 보상을 받아요.':'실제 광고가 아닌 테스트 화면이에요.';
+      btn.disabled=true;btn.textContent=left+'초';$('adov').hidden=false;
+      var iv=setInterval(function(){
+        left--;
+        if(left>0){btn.textContent=left+'초';return;}
+        clearInterval(iv);btn.disabled=false;btn.textContent=reward?'보상 받기':'닫기';
+      },1000);
+      btn.onclick=function(){if(btn.disabled)return;$('adov').hidden=true;res(true);};
+    });
+  }
+  return {
+    init:init,
+    showBanner:function(){
+      return init().then(function(){
+        if(bannerOn)return;bannerOn=true;
+        if(A){
+          var p=bannerMade?pcall(A,'resumeBanner',undefined,5000):pcall(A,'showBanner',{adId:ADS.banner,adSize:'ADAPTIVE_BANNER',position:'BOTTOM_CENTER',margin:0,isTesting:ADS.testing},8000);
+          bannerMade=true;setBH(60);
+          return p.catch(function(){bannerMade=false;bannerOn=false;setBH(0);});
+        }
+        $('banner').hidden=false;setBH(54);
+      });
+    },
+    hideBanner:function(){
+      return init().then(function(){
+        if(!bannerOn){setBH(0);return;}
+        bannerOn=false;setBH(0);
+        if(A)return pcall(A,'hideBanner',undefined,5000).catch(function(){});
+        $('banner').hidden=true;
+      });
+    },
+    removeBanner:function(){
+      return init().then(function(){
+        bannerOn=false;setBH(0);$('banner').hidden=true;
+        if(A&&bannerMade){bannerMade=false;return pcall(A,'removeBanner',undefined,5000).catch(function(){});}
+      });
+    },
+    interstitial:function(){
+      return init().then(function(){
+        if(A){
+          return pcall(A,'prepareInterstitial',{adId:ADS.inter,isTesting:ADS.testing},20000)
+            .then(function(){return pcall(A,'showInterstitial',undefined,120000);}).then(function(){return true;}).catch(function(){return false;});
+        }
+        return mock('전면 광고 (테스트)',3,false);
+      });
+    },
+    rewarded:function(){
+      return init().then(function(){
+        if(A){
+          return new Promise(function(res){
+            var got=false,hs=[],done=false;
+            function fin(v){if(done)return;done=true;hs.forEach(function(h){try{h.then(function(x){x.remove();});}catch(e){}});res(v);}
+            function on(n,f){var h=padd(A,n,f);if(h)hs.push(h);}
+            on('onRewardedVideoAdReward',function(){got=true;});
+            on('onRewardedVideoAdDismissed',function(){fin(got);});
+            on('onRewardedVideoAdFailedToShow',function(){fin(false);});
+            setTimeout(function(){fin(got);},180000);
+            pcall(A,'prepareRewardVideoAd',{adId:ADS.reward,isTesting:ADS.testing},20000)
+              .then(function(){return pcall(A,'showRewardVideoAd',undefined,180000);})
+              .then(function(r){if(r)got=true;}).catch(function(){fin(false);});
+          });
+        }
+        return mock('보상형 광고 (테스트)',3,true);
+      });
+    }
+  };
+})();
+var scr='';
+// 하단 배너는 온실(메뉴)과 플레이 중 모두 보인다. 플레이 화면에는 하단 버튼이 없어서 배너 근처를 잘못 누를 일이 적다.
+function refreshBanner(){
+  if((scr==='menu'||scr==='battle')&&!adsRemoved())return Ads.showBanner();
+  return Ads.hideBanner();
+}
+
+// ---------------------------------------------------------------- in-app purchases
+// 구글 플레이 결제는 앱을 플레이 콘솔(내부 테스트)에 올리고 상품을 등록해야 동작한다.
+// 상품 조회에 성공하면 실제 결제, 아니면 테스트 결제 화면으로 대신한다.
+var PRODUCTS=[
+  {id:'remove_ads',type:'once',name:'광고 제거',desc:'배너와 전면광고가 사라져요. 보상형 광고는 원할 때만 나와요.',price:'₩3,300'},
+  {id:'moon_pass',type:'sub',name:'달빛 패스 (월간)',desc:'광고 제거 + 이슬 쌓이는 시간 6시간 + 매일 이슬 200',price:'₩4,900/월'},
+  {id:'dew_s',type:'coin',coins:300,name:'이슬 한 병',desc:'이슬 300',price:'₩1,100'},
+  {id:'dew_m',type:'coin',coins:1000,name:'이슬 한 상자',desc:'이슬 1,000',price:'₩3,300'},
+  {id:'dew_l',type:'coin',coins:2400,name:'이슬 한 통',desc:'이슬 2,400',price:'₩6,600'}
+];
+var Store=(function(){
+  var P=null,real=false,ready=null;
+  function init(){
+    if(ready)return ready;
+    P=plugin('NativePurchases');
+    if(!P){ready=Promise.resolve();return ready;}
+    ready=pcall(P,'isBillingSupported',undefined,4000).then(function(r){
+      if(!r||!r.isBillingSupported)return;
+      return pcall(P,'getProducts',{productIdentifiers:['remove_ads','dew_s','dew_m','dew_l'],productType:'inapp'},6000).then(function(res){
+        real=!!(res&&res.products&&res.products.length);
+      });
+    }).catch(function(){real=false;});
+    return ready;
+  }
+  return {
+    init:init,
+    mode:function(){return real?'play':'test';},
+    buy:function(p){
+      return init().then(function(){
+        if(real&&P){
+          return pcall(P,'purchaseProduct',{productIdentifier:p.id,productType:p.type==='sub'?'subs':'inapp',planIdentifier:p.type==='sub'?'monthly':undefined,quantity:1,isConsumable:p.type==='coin'},180000)
+            .then(function(){return true;}).catch(function(){return false;});
+        }
+        return dialog('테스트 결제',p.name+'  '+p.price+'\n실제 결제는 일어나지 않아요.',[{label:'결제하기',primary:true},{label:'취소'}])
+          .then(function(i){return i===0;});
+      });
+    },
+    restore:function(){
+      return init().then(function(){
+        if(real&&P){return pcall(P,'restorePurchases',undefined,30000).then(function(){return true;}).catch(function(){return false;});}
+        return false;
+      });
+    }
+  };
+})();
+function grant(p){
+  if(p.id==='remove_ads')S.iap.removeAds=true;
+  else if(p.type==='sub')S.iap.subUntil=Math.max(Date.now(),S.iap.subUntil)+30*24*3600*1000;
+  else if(p.coins)S.dew+=p.coins;
+  saveState();
+}
+
+// ---------------------------------------------------------------- story
+var STAGES=[
+  '문 앞 화단','이끼 낀 길','유리창 아래','작은 연못가','달봉오리 길',
+  '라벤더 언덕','반딧불 정자','별비 온실','구름 다락','큰 달꽃 정원'
+];
+function stageName(n){return (chap(n)>1?'깊은 밤 ':'')+STAGES[Math.floor((loc(n)-1)/10)];}
+var INTRO='여우 하루는 돌아가신 달래 할머니의 낡은 온실을 물려받았어요.\n\n한때는 밤마다 달꽃이 환하게 피던 곳이었지만, 지금은 새싹들이 모두 잠들어 있어요.\n\n온실 곳곳에는 할머니의 편지가 숨어 있대요. 10번째 스테이지를 깰 때마다 한 통씩 열어 볼 수 있어요.';
+var LETTERS=[
+  '하루야, 이 온실에 온 걸 환영한단다.\n밤마다 달빛이 쉬어 가던 곳이야.\n서두르지 않아도 괜찮단다. 새싹은 눈에 보이지 않을 때도 조금씩 자라고 있으니까.',
+  '이끼 길은 미끄러우니 천천히 걸으렴.\n네가 쉬는 동안에도 정원은 자란단다.',
+  '유리창 아래엔 심술쟁이 잡초가 자주 나. 미워하지는 마렴.\n그 애도 햇볕이 좋아서 온 거란다. 그냥 톡, 하고 뽑아 주면 돼.',
+  '연못에는 달이 비치는 밤이 있단다.\n물에 비친 달을 보다가 한참 앉아 있어도 좋아.\n쉬는 것도 정원 일의 절반이야.',
+  '달봉오리 길의 새싹들은 이 온실에서 가장 오래됐단다.\n크게 자라려면 시간이 걸리지. 반딧불이들이 곁에 있어 줄 거야.',
+  '라벤더 향이 나니? 할머니가 잠이 안 올 때 맡던 향이란다.\n하루도 오늘은 푹 자렴.',
+  '정자에 앉으면 반딧불이 모여든단다.\n혼자 있어도 혼자가 아닌 느낌이 드는 곳이지.',
+  '별비가 오는 날엔 유리 지붕이 노래를 한단다.\n귀를 기울여 보렴. 새싹도 그 노래에 맞춰 자라.',
+  '다락방엔 낡은 물뿌리개가 있어. 내 것이었지만 이제 네 것이란다.\n손잡이가 닳은 건 그동안 많이 사랑받았다는 뜻이야.',
+  '하루야, 마지막 편지구나.\n달꽃이 피는 건 내가 한 일이 아니란다. 곁에서 기다려 준 누군가가 있었기 때문이야.\n이제 이 온실은 네 것이야. 고맙다, 하루야.'
+];
+var ALT=[
+  '온실 깊은 곳에도 달빛이 닿기 시작했단다.\n더 먼 정원까지 가 보지 않겠니?',
+  '밤이 깊을수록 별은 더 잘 보인단다.\n오늘도 천천히, 네 속도로.',
+  '새싹도 사람도 비슷하단다. 물을 주고 기다리면 언젠가 핀단다.',
+  '하루야, 쉬어 가도 괜찮아. 온실은 어디 가지 않는단다.',
+  '잡초도 가끔은 꽃이 되기도 한단다. 신기하지?'
+];
+var WHISPER=['새싹이 기지개를 켜요.','반딧불이 하품을 해요.','온실에 따뜻한 바람이 불어요.','잎사귀 위로 이슬이 또르르 굴러가요.','멀리서 올빼미 소리가 들려요.','달빛이 유리창에 살며시 앉아요.'];
+var ENDING='큰 달꽃이 활짝 피었어요.\n온실 가득 달빛이 번지고, 하루는 오랜만에 소리 내어 웃었어요.\n\n— 1장 끝 —\n온실의 더 깊은 문이 열렸어요. 2장은 더 깊은 밤의 정원이에요.';
+function letterFor(n){
+  if(!isDecade(n))return WHISPER[n%WHISPER.length];
+  var i=loc(n)/10-1;
+  return chap(n)===1?LETTERS[i]:ALT[(chap(n)*3+i)%ALT.length];
+}
+
+// ---------------------------------------------------------------- menu
+var G=null,running=false,last=0,inp={down:false,x:W/2,y:H/2,tapWeed:null},hintT=0,clockT=0,viewPage=null,buffKey='';
+var cv=$('cv'),ctx=cv.getContext('2d');
+var UPS=[
+  {k:'fly',name:'반딧불',desc:'자동으로 키우는 속도와 잡초 청소 속도가 늘어요'},
+  {k:'can',name:'물뿌리개',desc:'누르고 끌 때 키우는 속도가 늘어요'},
+  {k:'soil',name:'영양 흙',desc:'모든 성장 속도가 레벨당 +12%'}
+];
+var BUFF_MIN=20;
+function clearedMax(){return S.best||0;}
+function buffActive(){return S&&S.buff>Date.now();}
+function idleAmount(){return offlineReward(clearedMax(),(Date.now()-S.last)/60000,subActive());}
+function fmtLeft(ms){var s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2);}
+function renderBuff(force){
+  var on=buffActive(),key=on?'a':'i';
+  if(force||key!==buffKey){
+    buffKey=key;
+    $('buff').innerHTML='<h2>달빛 축복</h2><div class="idlerow"><span>'+(on?'성장 속도 +50% · 클리어 이슬 +50% · 남은 시간 <b class="bufft" id="bufft"></b>':'광고를 보면 '+BUFF_MIN+'분 동안 성장 속도 +50%, 클리어 이슬 +50%')+'</span>'+
+      '<button class="buy alt" id="buffgo">'+(on?'광고 보고 '+BUFF_MIN+'분으로 연장':'광고 보고 '+BUFF_MIN+'분 받기')+'</button></div>';
+  }
+  var t=$('bufft');if(t)t.textContent=fmtLeft(S.buff-Date.now());
+}
+setInterval(function(){try{if(scr==='menu'&&S)renderBuff(false);}catch(e){}},1000);
+function renderMenu(){
+  $('coins').textContent=S.dew;
+  $('acct').textContent=ACC.name+(subActive()?' · 달빛 패스':'');
+  var cm=clearedMax(),amt=idleAmount(),cap=subActive()?360:120;
+  var mins=Math.min(cap,Math.floor(Math.max(0,Date.now()-S.last)/60000));
+  var h='<h2>밤새 맺힌 이슬</h2><div class="idlerow"><span>'+(cm?('쌓인 시간 '+mins+'분 (최대 '+cap+'분)'):'스테이지를 한 번 클리어하면 이슬이 맺히기 시작해요.')+'</span><div class="idlebtns">'+
+    '<button class="buy" id="claim"'+(amt>0?'':' disabled')+'>'+(amt>0?amt+' 받기':'없음')+'</button>'+
+    '<button class="buy alt" id="claim2"'+(amt>0?'':' disabled')+'>광고 보고 '+(amt>0?amt*2:'×2')+'</button></div></div>';
+  if(subActive()&&S.daily!==today())h+='<div class="idlerow" style="margin-top:8px"><span>달빛 패스 출석 보상</span><button class="buy" id="daily">200 받기</button></div>';
+  $('idle').innerHTML=h;
+  renderBuff(true);
+  // 강화 (끝없이) + 강화 10회마다 퀘스트 보상
+  h='<h2>강화 <small class="muted">총 '+S.upTotal+'회</small></h2>';
+  var goal=(S.quest+1)*10,claimable=Math.floor(S.upTotal/10)-S.quest;
+  h+='<div class="up quest"><b>강화 퀘스트</b><span>'+(claimable>0?('강화 '+goal+'회 달성! 보상을 받아요'+(claimable>1?' (대기 '+claimable+'개)':'')):('강화 '+goal+'회 달성 ('+S.upTotal+'/'+goal+') · 달성 때마다 큰 이슬 보상'))+'</span>'+
+    '<button class="buy" id="quest"'+(claimable>0?'':' disabled')+'>'+(claimable>0?'+'+questReward(S.quest+1,10*(S.quest+1)):(goal-S.upTotal)+'회 남음')+'</button></div>';
+  UPS.forEach(function(u){
+    var lv=S.up[u.k],c=cost(lv);
+    h+='<div class="up"><b>'+u.name+' Lv.'+lv+'</b><span>'+u.desc+'</span>'+
+       '<button class="buy" data-k="'+u.k+'"'+(S.dew<c?' disabled':'')+'>'+c+' 이슬</button></div>';
+  });
+  $('ups').innerHTML=h;
+  // 스테이지: 10개씩 페이지로 보여 준다
+  if(viewPage===null)viewPage=Math.floor(cm/10);
+  var p0=viewPage*10+1,front=Math.floor(cm/10);
+  var s='<div class="pager"><button class="link" id="pgprev"'+(viewPage<=0?' disabled':'')+'>◀ 이전</button><b>'+label(p0)+' ~ '+label(p0+9)+'</b><button class="link" id="pgnext"'+(viewPage>=front?' disabled':'')+'>다음 ▶</button></div><div class="stages">';
+  for(var i=p0;i<p0+10;i++){
+    var boss=isBig(i),done=(i<=cm),lock=(i>cm+1);
+    s+='<button class="st'+(boss?' boss':'')+(done?' done':'')+(lock?' locked':'')+'" data-s="'+i+'"'+(lock?' disabled':'')+'>'+(lock?'🔒':label(i))+
+       '<small>'+(done?'클리어':(isDecade(i)?'★ 보상':(boss?'큰 새싹':'')))+'</small></button>';
+  }
+  $('stages').innerHTML=s+'</div>';
+  var lh='<h2>할머니의 편지함</h2>',n=0;
+  for(i=10;i<=100;i+=10){if(cm>=i){n++;lh+='<details class="letter"><summary>1-'+i+'. '+STAGES[i/10-1]+'</summary><p>'+LETTERS[i/10-1]+'</p></details>';}}
+  if(!n)lh+='<p class="help">10번째 스테이지를 클리어할 때마다 편지가 한 통씩 열려요.</p>';
+  $('letters').innerHTML=lh;
+  renderShop();
+}
+function renderShop(){
+  var h='<h2>상점</h2>';
+  PRODUCTS.forEach(function(p){
+    var owned=(p.id==='remove_ads'&&S.iap.removeAds),act=(p.type==='sub'&&subActive());
+    var label=owned?'구매 완료':(act?'이용 중':p.price);
+    var desc=p.desc+(act?' ('+fmtDate(S.iap.subUntil)+'까지)':'');
+    h+='<div class="up"><b>'+p.name+'</b><span>'+desc+'</span><button class="buy" data-p="'+p.id+'"'+((owned||act)?' disabled':'')+'>'+label+'</button></div>';
+  });
+  h+='<div class="shopfoot"><button class="link" id="restore">구매 복원</button><span class="mode">'+(Store.mode()==='play'?'구글 플레이 결제':'테스트 결제 · 실제 결제 안 됨')+'</span></div>';
+  $('shop').innerHTML=h;
+}
+$('idle').addEventListener('click',function(ev){
+  var b=ev.target.closest('button');if(!b||b.disabled)return;
+  if(b.id==='claim'){S.dew+=idleAmount();S.last=Date.now();saveState();renderMenu();}
+  else if(b.id==='claim2'){
+    b.disabled=true;
+    Ads.rewarded().then(function(ok){
+      if(ok){S.dew+=idleAmount()*2;S.last=Date.now();saveState();}
+      renderMenu();
+    });
+  }else if(b.id==='daily'){S.dew+=200;S.daily=today();saveState();renderMenu();}
+});
+$('ups').addEventListener('click',function(ev){
+  var b=ev.target.closest('.buy');if(!b||b.disabled)return;
+  if(b.id==='quest'){
+    var q=S.quest+1;S.dew+=questReward(q,10*q);S.quest=q;saveState();renderMenu();return;
+  }
+  var k=b.getAttribute('data-k'),c=cost(S.up[k]);
+  if(S.dew>=c){S.dew-=c;S.up[k]++;S.upTotal++;saveState();renderMenu();}
+});
+$('buff').addEventListener('click',function(ev){
+  var b=ev.target.closest('button');if(!b||b.disabled)return;
+  b.disabled=true;
+  Ads.rewarded().then(function(ok){
+    if(ok){S.buff=Date.now()+BUFF_MIN*60000;saveState();}
+    renderBuff(true);
+  });
+});
+$('stages').addEventListener('click',function(ev){
+  var pb=ev.target.closest('.pager button');
+  if(pb){if(pb.disabled)return;viewPage+=(pb.id==='pgnext'?1:-1);renderMenu();return;}
+  var b=ev.target.closest('.st');if(!b||b.disabled)return;
+  startBattle(parseInt(b.getAttribute('data-s'),10));
+});
+$('shop').addEventListener('click',function(ev){
+  var b=ev.target.closest('button');if(!b)return;
+  if(b.id==='restore'){
+    Store.restore().then(function(ok){
+      dialog('구매 복원',ok?'구매 내역을 다시 불러왔어요.':'복원할 구매 내역이 없어요.',[{label:'확인',primary:true}]);
+    });
+    return;
+  }
+  var id=b.getAttribute('data-p'),p=null;
+  PRODUCTS.forEach(function(x){if(x.id===id)p=x;});
+  if(!p||b.disabled)return;
+  Store.buy(p).then(function(ok){
+    if(!ok)return;
+    grant(p);renderMenu();
+    if(adsRemoved())Ads.removeBanner();
+  });
+});
+$('reset').addEventListener('click',function(){
+  dialog('진행 상황 초기화','이 계정의 강화와 클리어 기록을 모두 지워요. 구매 내역은 남아요.',[{label:'초기화',primary:true},{label:'취소'}]).then(function(i){
+    if(i!==0)return;
+    var iap=S.iap;S=defState();S.iap=iap;saveState();renderMenu();
+  });
+});
+$('switch').addEventListener('click',function(){saveState();showLogin();});
+function maybeIntro(){
+  try{if(S&&!S.intro){S.intro=true;saveState();dialog('달빛 온실',INTRO,[{label:'온실로 들어가기',primary:true}]);}}catch(e){report(e);}
+}
+
+// ---------------------------------------------------------------- auto update (앱에서만 동작)
+function verLabel(){
+  var v=String(MMYG.version);
+  return v.length>=12?(+v.slice(4,6))+'/'+(+v.slice(6,8))+' '+v.slice(8,10)+':'+v.slice(10,12)+' 빌드':'v'+v;
+}
+function renderUpd(){
+  if(!window.MMYG)return;
+  var st=MMYG.state,ready=(st==='ready');
+  var c=$('updcard');
+  c.hidden=!ready;
+  if(ready)c.innerHTML='<h2>새 버전이 준비됐어요</h2><div class="idlerow"><span>진행 상황은 그대로 유지돼요.</span><button class="buy" id="updgo">지금 적용</button></div>';
+  var lg=$('lgupd');
+  lg.hidden=!ready;
+  if(ready)lg.innerHTML='새 버전이 준비됐어요. <button class="link" id="lgupdgo">지금 적용</button>';
+  var txt={checking:'확인 중…',downloading:'새 버전을 받는 중…',ready:'새 버전이 준비됐어요',latest:'최신 버전이에요',offline:'서버에 연결하지 못했어요',error:'확인하지 못했어요',idle:''}[st]||'';
+  var v=$('verline');
+  v.hidden=false;
+  v.innerHTML='버전 '+verLabel()+' · <button class="link" id="updchk">업데이트 확인</button> <span>'+txt+'</span>';
+}
+function applyUpdate(){lsSet('mmyg-autologin','1');MMYG.apply();}
+if(window.MMYG){
+  MMYG.onchange=function(){renderUpd();};
+  document.addEventListener('click',function(ev){
+    var b=ev.target.closest('button');if(!b)return;
+    if(b.id==='updgo'||b.id==='lgupdgo')applyUpdate();
+    else if(b.id==='updchk')MMYG.check(true);
+  });
+}
+
+// ---------------------------------------------------------------- login
+function show(which){
+  scr=which;
+  $('login').hidden=(which!=='login');
+  $('menu').hidden=(which!=='menu');
+  $('battle').hidden=(which!=='battle');
+}
+function showLogin(){
+  running=false;
+  show('login');
+  renderUpd();
+  var last=loadAcc().last;
+  var bs=$('lgbtns').querySelectorAll('.lg');
+  for(var i=0;i<bs.length;i++){
+    bs[i].disabled=false;
+    bs[i].querySelector('.badge').hidden=(bs[i].getAttribute('data-t')!==last);
+  }
+  try{Ads.hideBanner().catch(function(){});}catch(e){report(e);}
+}
+$('lgbtns').addEventListener('click',function(ev){
+  var b=ev.target.closest('.lg');if(!b||b.disabled)return;
+  b.disabled=true;$('lgerr').hidden=true;
+  var t=setTimeout(function(){b.disabled=false;report(new Error('시작이 오래 걸려요. 다시 눌러 주세요.'));},8000);
+  Auth[b.getAttribute('data-t')]().then(function(acc){clearTimeout(t);enter(acc);}).catch(function(e){clearTimeout(t);b.disabled=false;report(e);});
+});
+function enter(acc){
+  ACC=acc;
+  try{saveAcc({last:acc.type});}catch(e){}
+  S=loadSave(acc.id);
+  try{saveState();}catch(e){}
+  goMenu();
+  try{Store.init().then(function(){if(scr==='menu')renderShop();}).catch(function(){});}catch(e){report(e);}
+  if(window.MMYG)MMYG.ok();
+  maybeIntro();
+}
+function goMenu(){
+  running=false;
+  viewPage=null;
+  show('menu');
+  try{renderMenu();}catch(e){report(e);}
+  try{renderUpd();}catch(e){report(e);}
+  try{var p=refreshBanner();if(p&&p.catch)p.catch(function(){});}catch(e){report(e);}
+}
+
+// ---------------------------------------------------------------- battle flow
+function startBattle(stage){
+  G=newGame(stage,S.up,Math.floor(Math.random()*65535),buffActive());
+  G.buffed=buffActive();G.bonus=0;
+  G.settled=false;G.continued=false;G.doubled=false;
+  inp.down=false;inp.tapWeed=null;hintT=(stage===1&&!S.best)?6:0;
+  $('result').hidden=true;
+  $('btitle').textContent=label(stage)+' '+stageName(stage);
+  show('battle');
+  try{var p=refreshBanner();if(p&&p.catch)p.catch(function(){});}catch(e){report(e);}
+  resize();
+  running=true;last=performance.now();clockT=0;
+  requestAnimationFrame(frame);
+}
+$('back').addEventListener('click',function(){running=false;goMenu();});
+
+function settle(){
+  if(!G||G.settled||G.status==='play')return;
+  G.settled=true;
+  if(G.buffed)G.gain=Math.round(G.gain*BUFF_MUL);
+  S.dew+=G.gain;
+  if(G.status==='won'){
+    if(G.stage>S.best)S.best=G.stage;
+    S.ad.clears++;
+    if(isDecade(G.stage)){G.bonus=decadeBonus(G.stage);S.dew+=G.bonus;}
+  }
+  saveState();
+}
+function interstitialDue(){return !adsRemoved()&&S.ad.clears>=4&&Date.now()-S.ad.last>240000;}
+function leaveResult(next){
+  var won=G&&G.status==='won';
+  settle();
+  $('result').hidden=true;
+  if(won&&interstitialDue()){
+    Ads.interstitial().then(function(){S.ad.clears=0;S.ad.last=Date.now();saveState();next();});
+  }else next();
+}
+$('rnext').addEventListener('click',function(){leaveResult(function(){startBattle(G.stage+1);});});
+$('rretry').addEventListener('click',function(){leaveResult(function(){startBattle(G.stage);});});
+$('rmenu').addEventListener('click',function(){leaveResult(goMenu);});
+$('rad').addEventListener('click',function(){
+  var b=$('rad');if(b.disabled)return;
+  b.disabled=true;
+  Ads.rewarded().then(function(ok){
+    if(!ok){b.disabled=false;return;}
+    if(G.status==='won'){
+      S.dew+=G.gain;G.doubled=true;saveState();
+      b.hidden=true;$('rg').textContent='+'+(G.gain*2)+' 이슬 (2배)';
+    }else{
+      continueRun();
+    }
+  });
+});
+function continueRun(){
+  G.continued=true;G.status='play';G.day=G.t+35;
+  $('result').hidden=true;hintT=0;
+  running=true;last=performance.now();
+  requestAnimationFrame(frame);
+}
+
+function resize(){
+  var box=$('stagebox');if(!box)return;
+  var bw=box.clientWidth,bh=box.clientHeight;
+  if(bw<10||bh<10)return;
+  var sc=Math.min(bw/W,bh/H),cw=Math.floor(W*sc),ch=Math.floor(H*sc),dpr=window.devicePixelRatio||1;
+  cv.style.width=cw+'px';cv.style.height=ch+'px';
+  cv.width=Math.round(cw*dpr);cv.height=Math.round(ch*dpr);
+  ctx.setTransform(cv.width/W,0,0,cv.height/H,0,0);
+}
+window.addEventListener('resize',function(){if(running){resize();draw();}});
+function pxy(ev){var r=cv.getBoundingClientRect();return {x:(ev.clientX-r.left)/r.width*W,y:(ev.clientY-r.top)/r.height*H};}
+cv.addEventListener('pointerdown',function(ev){var p=pxy(ev);inp.down=true;inp.x=p.x;inp.y=p.y;inp.tapWeed={x:p.x,y:p.y};try{cv.setPointerCapture(ev.pointerId);}catch(e){}ev.preventDefault();});
+cv.addEventListener('pointermove',function(ev){if(inp.down){var p=pxy(ev);inp.x=p.x;inp.y=p.y;}});
+['pointerup','pointercancel','lostpointercapture'].forEach(function(n){cv.addEventListener(n,function(){inp.down=false;});});
+
+function frame(ts){
+  if(!running)return;
+  var dt=(ts-last)/1000;last=ts;clockT+=Math.min(dt,0.1);
+  update(G,dt,inp);
+  if(hintT>0)hintT-=dt;
+  draw();hud();
+  if(G.status!=='play'){finish();return;}
+  requestAnimationFrame(frame);
+}
+function hud(){
+  $('hptxt').textContent='피어난 꽃 '+G.bloomed+' / '+G.total;
+  $('hpbar').style.width=(progress(G)*100)+'%';
+  var left=Math.max(0,G.day-G.t),f=left/G.day;
+  $('suntxt').textContent='해질녘까지 '+Math.ceil(left)+'초';
+  var sb=$('sunbar');sb.style.width=(f*100)+'%';sb.className='sun'+(f<0.25?' late':'');
+  var m=$('mode');m.textContent=(G.manual?'물뿌리개':'반딧불')+(G.buffed?' ✨':'');m.className='mode'+(G.manual?' manual':'');
+}
+function finish(){
+  running=false;
+  var won=G.status==='won';
+  settle();
+  var gain=G.gain;
+  $('rt').textContent=won?'새싹이 모두 피었어요':'해가 저물었어요';
+  $('rt').style.color=won?'var(--ok)':'var(--accent)';
+  var txt=won?letterFor(G.stage):'새싹들이 잠들었지만 다시 아침이 오면 이어서 자랄 거예요.\n강화를 하거나 직접 물을 주면 더 빨리 피울 수 있어요.';
+  if(won&&G.stage===100)txt+='\n\n'+ENDING;
+  $('rp').textContent=txt;
+  $('rg').textContent='+'+gain+' 이슬'+(won?'':' (피어난 만큼)')+(G.buffed?' · 축복 +50%':'')+(G.bonus?'\n★ 10스테이지 보너스 +'+G.bonus:'');
+  var rad=$('rad');rad.disabled=false;
+  if(won){rad.hidden=false;rad.textContent='광고 보고 이슬 2배 (+'+gain+')';}
+  else if(!G.continued){rad.hidden=false;rad.textContent='광고 보고 해 늘리기 (+35초)';}
+  else rad.hidden=true;
+  $('rnext').style.display=won?'':'none';
+  $('rnext').textContent='다음 스테이지 '+label(G.stage+1);
+  $('rretry').textContent=won?'다시 가꾸기':'다시 도전';
+  $('result').hidden=false;
+}
+
+// ---------------------------------------------------------------- drawing
+function font(px,w){return (w||'700')+' '+px+'px "Noto Sans KR",system-ui,sans-serif';}
+function mix(a,b,t){return [Math.round(a[0]+(b[0]-a[0])*t),Math.round(a[1]+(b[1]-a[1])*t),Math.round(a[2]+(b[2]-a[2])*t)];}
+function rgb(c){return 'rgb('+c[0]+','+c[1]+','+c[2]+')';}
+var SKY=[{t:[143,211,232],b:[221,240,226]},{t:[240,176,170],b:[255,224,178]},{t:[48,42,96],b:[110,78,130]}];
+function skyAt(f){ // f 0(아침)~1(해질녘)
+  var seg=f<0.6?0:1,k=seg===0?f/0.6:(f-0.6)/0.4;
+  return {t:mix(SKY[seg].t,SKY[seg+1].t,k),b:mix(SKY[seg].b,SKY[seg+1].b,k)};
+}
+function drawPlant(s,stage,time){
+  var frac=Math.min(1,s.p/s.need),sc=s.big?1.7:1,x=s.x,y=s.y;
+  ctx.fillStyle='#6b4b36';ctx.beginPath();ctx.ellipse(x,y+2,26*sc,9*sc,0,0,6.3);ctx.fill();
+  ctx.fillStyle='#7d5a42';ctx.beginPath();ctx.ellipse(x,y,22*sc,7*sc,0,0,6.3);ctx.fill();
+  var h=(8+52*frac)*sc,sway=Math.sin(time*1.4+x)*2*frac;
+  ctx.strokeStyle='#4f9d5a';ctx.lineWidth=4*sc;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+sway,y-h*0.5,x+sway*1.5,y-h);ctx.stroke();
+  var tx=x+sway*1.5,ty=y-h;
+  if(frac>0.2){
+    ctx.fillStyle='#6bbf72';
+    var ly=y-h*0.45,ls=(6+10*frac)*sc;
+    ctx.beginPath();ctx.ellipse(x-ls*0.9,ly,ls,ls*0.45,-0.5,0,6.3);ctx.fill();
+    ctx.beginPath();ctx.ellipse(x+ls*0.9,ly-4*sc,ls,ls*0.45,0.5,0,6.3);ctx.fill();
+  }
+  if(s.bloom){
+    var hue=(stage*36)%360;
+    ctx.fillStyle='hsl('+hue+',75%,78%)';
+    var pr=(s.big?15:9)*(1+0.05*Math.sin(time*2+x));
+    for(var i=0;i<6;i++){var a=i*Math.PI/3+time*0.2;ctx.beginPath();ctx.arc(tx+Math.cos(a)*pr,ty+Math.sin(a)*pr,pr*0.75,0,6.3);ctx.fill();}
+    ctx.fillStyle='#fff3b0';ctx.beginPath();ctx.arc(tx,ty,pr*0.6,0,6.3);ctx.fill();
+  }else if(frac>0.55){
+    ctx.fillStyle='#e7d8a5';ctx.beginPath();ctx.ellipse(tx,ty,(4+8*frac)*sc*0.7,(6+10*frac)*sc*0.7,0,0,6.3);ctx.fill();
+  }else{
+    ctx.fillStyle='#6bbf72';ctx.beginPath();ctx.arc(tx,ty,4*sc,0,6.3);ctx.fill();
+  }
+  if(s.weed>0){
+    ctx.globalAlpha=0.45+0.55*s.weed;ctx.strokeStyle='#3b4a2c';ctx.lineWidth=3;
+    for(var j=-3;j<=3;j++){ctx.beginPath();ctx.moveTo(x+j*6*sc,y+2);ctx.quadraticCurveTo(x+j*9*sc,y-20*sc,x+j*12*sc+Math.sin(time*3+j)*2,y-30*sc);ctx.stroke();}
+    ctx.globalAlpha=1;
+  }
+}
+function draw(){
+  var g=G,f=Math.min(1,g.t/g.day),c=skyAt(f),i;
+  var grd=ctx.createLinearGradient(0,0,0,H);grd.addColorStop(0,rgb(c.t));grd.addColorStop(0.55,rgb(c.b));ctx.fillStyle=grd;ctx.fillRect(0,0,W,H);
+  // 해/달
+  var sx=40+f*280,sy=130-Math.sin(f*Math.PI)*70;
+  ctx.fillStyle=f<0.75?'#fff1a8':'#f4f1ff';ctx.globalAlpha=0.9;ctx.beginPath();ctx.arc(sx,sy,22,0,6.3);ctx.fill();ctx.globalAlpha=1;
+  // 온실 유리 틀
+  ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=2;
+  for(i=1;i<4;i++){ctx.beginPath();ctx.moveTo(W*i/4,0);ctx.lineTo(W*i/4,210);ctx.stroke();}
+  ctx.beginPath();ctx.moveTo(0,105);ctx.lineTo(W,105);ctx.stroke();
+  // 바닥
+  ctx.fillStyle='#8f6f52';ctx.fillRect(0,210,W,H-210);
+  ctx.fillStyle='#a58463';ctx.fillRect(0,210,W,8);
+  ctx.fillStyle='rgba(0,0,0,.08)';for(i=0;i<9;i++)ctx.fillRect(i*45,230+((i*37)%300),30,3);
+  var time=clockT;
+  g.sp.slice().sort(function(a,b){return a.y-b.y;}).forEach(function(s){drawPlant(s,g.stage,time);});
+  // 반딧불
+  var tgt=null;g.sp.forEach(function(s){if(s.weed>0&&(!tgt||s.weed>tgt.weed))tgt=s;});
+  if(!tgt)g.sp.forEach(function(s){if(!s.bloom&&(!tgt||s.p/s.need>tgt.p/tgt.need))tgt=s;});
+  var nf=3+Math.min(5,g.up.fly);
+  for(i=0;i<nf;i++){
+    var a=time*1.3+i*6.28/nf,cx=tgt?tgt.x:W/2,cy=tgt?tgt.y-34:150,r=(tgt&&tgt.big?46:30)+8*Math.sin(time+i);
+    var fx=cx+Math.cos(a)*r,fy=cy+Math.sin(a*1.3)*r*0.6;
+    ctx.fillStyle='rgba(255,247,160,.35)';ctx.beginPath();ctx.arc(fx,fy,8,0,6.3);ctx.fill();
+    ctx.fillStyle='#fff7a0';ctx.beginPath();ctx.arc(fx,fy,3,0,6.3);ctx.fill();
+  }
+  // 꽃이 피는 순간
+  g.fx.forEach(function(e){
+    var k=e.age/1.6;ctx.strokeStyle='rgba(255,255,255,'+(1-k)+')';ctx.lineWidth=3;
+    ctx.beginPath();ctx.arc(e.x,e.y-50,10+60*k*(e.big?1.6:1),0,6.3);ctx.stroke();
+  });
+  // 물뿌리개
+  if(g.pointer.on){
+    var px=g.pointer.x,py=g.pointer.y;
+    ctx.fillStyle='#6fa8dc';ctx.beginPath();ctx.roundRect?ctx.roundRect(px-16,py-14,32,24,6):ctx.rect(px-16,py-14,32,24);ctx.fill();
+    ctx.strokeStyle='#6fa8dc';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(px-16,py-4);ctx.lineTo(px-30,py-18);ctx.stroke();
+    ctx.fillStyle='rgba(160,210,255,.9)';
+    for(i=0;i<7;i++){var dy=((time*90+i*17)%46);ctx.beginPath();ctx.arc(px+6+((i*13)%20)-10,py+12+dy,2.6,0,6.3);ctx.fill();}
+  }
+  if(hintT>0){
+    ctx.globalAlpha=Math.min(1,hintT);
+    ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(20,150,320,70);
+    ctx.fillStyle='#fff';ctx.font=font(15);ctx.textAlign='center';
+    ctx.fillText('손을 떼면 반딧불이 키워줘요',W/2,177);
+    ctx.fillText('누르고 끌면 물뿌리개로 더 빨리!',W/2,203);
+    ctx.globalAlpha=1;
+  }
+}
+
+// ---------------------------------------------------------------- boot
+window.addEventListener('resize',function(){if(scr==='battle'&&running)resize();});
+showLogin();
+// 시작한 뒤 3초 동안 오류가 없을 때만 "정상 시작"으로 기록한다. 기록이 없으면 다음 실행에서 이 버전은 버려진다.
+setTimeout(function(){if(window.MMYG&&bootErrs===0)MMYG.ok();},3000);
+// "지금 적용"으로 다시 시작했을 때만 마지막 계정으로 바로 들어간다
+if(lsGet('mmyg-autologin')==='1'){
+  lsSet('mmyg-autologin','0');
+  var lastT=loadAcc().last;
+  if(lastT&&Auth[lastT])Auth[lastT]().then(enter).catch(report);
+}
+</script>
+
+</body>
+</html>
