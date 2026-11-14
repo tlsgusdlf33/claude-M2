@@ -211,7 +211,7 @@ button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
   </section>
 </div>
 
-<div id="banner" hidden>테스트 배너 광고 · 광고 제거를 구매하면 사라져요</div>
+<div id="banner" hidden>테스트 배너 광고</div>
 <div id="adov" hidden>
   <div class="adbox">
     <div class="adtag">광고</div>
@@ -517,57 +517,13 @@ function refreshBanner(){
   return Ads.hideBanner();
 }
 
-// ---------------------------------------------------------------- in-app purchases
-// 구글 플레이 결제는 앱을 플레이 콘솔(내부 테스트)에 올리고 상품을 등록해야 동작한다.
-// 상품 조회에 성공하면 실제 결제, 아니면 테스트 결제 화면으로 대신한다.
-var PRODUCTS=[
-  {id:'remove_ads',type:'once',name:'광고 제거',desc:'배너와 전면광고가 사라져요. 보상형 광고는 원할 때만 나와요.',price:'₩3,300'},
-  {id:'moon_pass',type:'sub',name:'달빛 패스 (월간)',desc:'광고 제거 + 이슬 쌓이는 시간 6시간 + 매일 이슬 200',price:'₩4,900/월'},
-  {id:'dew_s',type:'coin',coins:300,name:'이슬 한 병',desc:'이슬 300',price:'₩1,100'},
-  {id:'dew_m',type:'coin',coins:1000,name:'이슬 한 상자',desc:'이슬 1,000',price:'₩3,300'},
-  {id:'dew_l',type:'coin',coins:2400,name:'이슬 한 통',desc:'이슬 2,400',price:'₩6,600'}
+// ---------------------------------------------------------------- ad shop
+// 인앱 결제 대신 보상형 광고를 보고 이슬을 받는다. 상품마다 하루 횟수 제한이 있다.
+var AD_SHOP=[
+  {id:'dew_s',coins:100,max:5,name:'이슬 한 병',desc:'광고 1회 · 이슬 100'},
+  {id:'dew_m',coins:300,max:2,name:'이슬 한 상자',desc:'광고 1회 · 이슬 300'}
 ];
-var Store=(function(){
-  var P=null,real=false,ready=null;
-  function init(){
-    if(ready)return ready;
-    P=plugin('NativePurchases');
-    if(!P){ready=Promise.resolve();return ready;}
-    ready=pcall(P,'isBillingSupported',undefined,4000).then(function(r){
-      if(!r||!r.isBillingSupported)return;
-      return pcall(P,'getProducts',{productIdentifiers:['remove_ads','dew_s','dew_m','dew_l'],productType:'inapp'},6000).then(function(res){
-        real=!!(res&&res.products&&res.products.length);
-      });
-    }).catch(function(){real=false;});
-    return ready;
-  }
-  return {
-    init:init,
-    mode:function(){return real?'play':'test';},
-    buy:function(p){
-      return init().then(function(){
-        if(real&&P){
-          return pcall(P,'purchaseProduct',{productIdentifier:p.id,productType:p.type==='sub'?'subs':'inapp',planIdentifier:p.type==='sub'?'monthly':undefined,quantity:1,isConsumable:p.type==='coin'},180000)
-            .then(function(){return true;}).catch(function(){return false;});
-        }
-        return dialog('테스트 결제',p.name+'  '+p.price+'\n실제 결제는 일어나지 않아요.',[{label:'결제하기',primary:true},{label:'취소'}])
-          .then(function(i){return i===0;});
-      });
-    },
-    restore:function(){
-      return init().then(function(){
-        if(real&&P){return pcall(P,'restorePurchases',undefined,30000).then(function(){return true;}).catch(function(){return false;});}
-        return false;
-      });
-    }
-  };
-})();
-function grant(p){
-  if(p.id==='remove_ads')S.iap.removeAds=true;
-  else if(p.type==='sub')S.iap.subUntil=Math.max(Date.now(),S.iap.subUntil)+30*24*3600*1000;
-  else if(p.coins)S.dew+=p.coins;
-  saveState();
-}
+function adUsed(id){if(S.ad.day!==today()){S.ad.day=today();S.ad.used={};}return S.ad.used[id]||0;}
 
 // ---------------------------------------------------------------- story
 var STAGES=[
@@ -666,13 +622,10 @@ function renderMenu(){
 }
 function renderShop(){
   var h='<h2>상점</h2>';
-  PRODUCTS.forEach(function(p){
-    var owned=(p.id==='remove_ads'&&S.iap.removeAds),act=(p.type==='sub'&&subActive());
-    var label=owned?'구매 완료':(act?'이용 중':p.price);
-    var desc=p.desc+(act?' ('+fmtDate(S.iap.subUntil)+'까지)':'');
-    h+='<div class="up"><b>'+p.name+'</b><span>'+desc+'</span><button class="buy" data-p="'+p.id+'"'+((owned||act)?' disabled':'')+'>'+label+'</button></div>';
+  AD_SHOP.forEach(function(p){
+    var left=p.max-adUsed(p.id);
+    h+='<div class="up"><b>'+p.name+'</b><span>'+p.desc+' (오늘 '+left+'/'+p.max+')</span><button class="buy alt" data-p="'+p.id+'"'+(left>0?'':' disabled')+'>광고 보기</button></div>';
   });
-  h+='<div class="shopfoot"><button class="link" id="restore">구매 복원</button><span class="mode">'+(Store.mode()==='play'?'구글 플레이 결제':'테스트 결제 · 실제 결제 안 됨')+'</span></div>';
   $('shop').innerHTML=h;
 }
 $('idle').addEventListener('click',function(ev){
@@ -709,24 +662,18 @@ $('stages').addEventListener('click',function(ev){
   startBattle(parseInt(b.getAttribute('data-s'),10));
 });
 $('shop').addEventListener('click',function(ev){
-  var b=ev.target.closest('button');if(!b)return;
-  if(b.id==='restore'){
-    Store.restore().then(function(ok){
-      dialog('구매 복원',ok?'구매 내역을 다시 불러왔어요.':'복원할 구매 내역이 없어요.',[{label:'확인',primary:true}]);
-    });
-    return;
-  }
+  var b=ev.target.closest('button');if(!b||b.disabled)return;
   var id=b.getAttribute('data-p'),p=null;
-  PRODUCTS.forEach(function(x){if(x.id===id)p=x;});
-  if(!p||b.disabled)return;
-  Store.buy(p).then(function(ok){
-    if(!ok)return;
-    grant(p);renderMenu();
-    if(adsRemoved())Ads.removeBanner();
+  AD_SHOP.forEach(function(x){if(x.id===id)p=x;});
+  if(!p||adUsed(id)>=p.max)return;
+  b.disabled=true;
+  Ads.rewarded().then(function(ok){
+    if(ok){S.dew+=p.coins;S.ad.used[id]=adUsed(id)+1;saveState();}
+    renderMenu();
   });
 });
 $('reset').addEventListener('click',function(){
-  dialog('진행 상황 초기화','이 계정의 강화와 클리어 기록을 모두 지워요. 구매 내역은 남아요.',[{label:'초기화',primary:true},{label:'취소'}]).then(function(i){
+  dialog('진행 상황 초기화','이 계정의 강화와 클리어 기록을 모두 지워요.',[{label:'초기화',primary:true},{label:'취소'}]).then(function(i){
     if(i!==0)return;
     var iap=S.iap;S=defState();S.iap=iap;saveState();renderMenu();
   });
@@ -796,7 +743,6 @@ function enter(acc){
   S=loadSave(acc.id);
   try{saveState();}catch(e){}
   goMenu();
-  try{Store.init().then(function(){if(scr==='menu')renderShop();}).catch(function(){});}catch(e){report(e);}
   if(window.MMYG)MMYG.ok();
   maybeIntro();
 }
