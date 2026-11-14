@@ -44,9 +44,9 @@ jobs:
           M=android/app/src/main/AndroidManifest.xml
           # 세로 화면 고정
           sed -i '0,/<activity/s//<activity android:screenOrientation="portrait"/' "$M"
-          # 구글 광고(테스트 앱 ID)와 결제 권한. 출시 때는 실제 앱 ID로 바꾼다
+          # 구글 광고(테스트 앱 ID)와 광고 ID 권한. 출시 때는 실제 앱 ID로 바꾼다
           sed -i 's#</application>#<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713"/></application>#' "$M"
-          sed -i '0,/<application/s##<uses-permission android:name="com.android.vending.BILLING"/><uses-permission android:name="com.google.android.gms.permission.AD_ID"/><application#' "$M"
+          sed -i '0,/<application/s##<uses-permission android:name="com.google.android.gms.permission.AD_ID"/><application#' "$M"
           cat "$M"
           npx cap sync android
 
